@@ -113,7 +113,7 @@ public :
    Scalar R() const { return sqrt(Mag2()); }
    Scalar Theta() const
    {
-      return (fX == Scalar(0) && fY == Scalar(0) && fZ == Scalar(0)) ? Scalar(0) : atan2(Rho(), Z());
+      return atan2(Rho(), Z());
    }
    Scalar Phi() const { return (fX == Scalar(0) && fY == Scalar(0)) ? Scalar(0) : atan2(fY, fX); }
 
