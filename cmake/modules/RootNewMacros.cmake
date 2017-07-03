@@ -373,9 +373,15 @@ function(ROOT_GENERATE_DICTIONARY dictionary)
     list(APPEND _implicitdeps CXX ${_dep})
   endforeach()
 
+  set(genverbosity "")
+  # Set -v2 when generating modules in cxxmodules mode to get warnings if the
+  # modulemap doesn't fit to the structure of our dictionaries.
+  if (cxxmodules)
+      set(genverbosity "-v2")
+  endif(cxxmodules)
   #---call rootcint------------------------------------------
   add_custom_command(OUTPUT ${dictionary}.cxx ${pcm_name} ${rootmap_name}
-                     COMMAND ${command} -f  ${dictionary}.cxx ${newargs} ${excludepathsargs} ${rootmapargs}
+                     COMMAND ${command} ${genverbosity} -f  ${dictionary}.cxx ${newargs} ${excludepathsargs} ${rootmapargs}
                                         ${ARG_OPTIONS} ${definitions} ${includedirs} ${headerfiles} ${_linkdef}
                      IMPLICIT_DEPENDS ${_implicitdeps}
                      DEPENDS ${_list_of_header_dependencies} ${_linkdef} ${ROOTCINTDEP})
@@ -398,28 +404,22 @@ function(ROOT_GENERATE_DICTIONARY dictionary)
                     DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT libraries)
     endif()
   endif()
-  if(cxxmodules)
-    # FIXME: Support mulptiple dictionaries. In some cases (libSMatrix and
-    # libGenVector) we have to have two or more dictionaries (eg. for math,
-    # we need the two for double vs Double32_t template specializations).
-    # In some other cases, eg. libTreePlayer.so we add in a separate dictionary
-    # files which for some reason (temporarily?) cannot be put in the PCH. Eg.
-    # all rest of the first dict is in the PCH but this file is not and it
-    # cannot be present in the original dictionary.
-    if(NOT ARG_MULTIDICT)
-      ROOT_CXXMODULES_APPEND_TO_MODULEMAP("${library_name}" "${headerfiles}")
-    endif()
-  endif(cxxmodules)
+  # FIXME: Support mulptiple dictionaries. In some cases (libSMatrix and
+  # libGenVector) we have to have two or more dictionaries (eg. for math,
+  # we need the two for double vs Double32_t template specializations).
+  # In some other cases, eg. libTreePlayer.so we add in a separate dictionary
+  # files which for some reason (temporarily?) cannot be put in the PCH. Eg.
+  # all rest of the first dict is in the PCH but this file is not and it
+  # cannot be present in the original dictionary.
+  if(NOT ARG_MULTIDICT)
+    ROOT_CXXMODULES_APPEND_TO_MODULEMAP("${library_name}" "${headerfiles}")
+  endif()
 endfunction()
 
 #---------------------------------------------------------------------------------------------------
 #---ROOT_CXXMODULES_APPEND_TO_MODULEMAP( library library_headers )
 #---------------------------------------------------------------------------------------------------
 function (ROOT_CXXMODULES_APPEND_TO_MODULEMAP library library_headers)
-  if(NOT cxxmodules)
-    message(FATAL_ERROR "Calling ROOT_CXXMODULES_APPEND_TO_MODULEMAP on non-modules build.")
-  endif()
-
   ROOT_FIND_DIRS_WITH_HEADERS(dirs)
 
   # Variable 'dirs' is the return result of ROOT_FIND_DIRS_WITH_HEADERS.
@@ -1113,6 +1113,30 @@ function(ROOT_PATH_TO_STRING resultvar path)
 endfunction(ROOT_PATH_TO_STRING)
 
 #----------------------------------------------------------------------------
+# function ROOT_ADD_GBENCHMARK(<benchmark> source1 source2... LIBRARIES)
+#----------------------------------------------------------------------------
+function(ROOT_ADD_GBENCHMARK benchmark)
+  CMAKE_PARSE_ARGUMENTS(ARG "" "" "LIBRARIES" ${ARGN})
+  include_directories(${CMAKE_CURRENT_BINARY_DIR} ${GBENCHMARK_INCLUDE_DIR})
+
+  ROOT_GET_SOURCES(source_files . ${ARG_UNPARSED_ARGUMENTS})
+  # Note we cannot use ROOT_EXECUTABLE without user-specified set of LIBRARIES to link with.
+  # The test suites should choose this in their specific CMakeLists.txt file.
+  # FIXME: For better coherence we could restrict the libraries the test suite could link
+  # against. For example, tests in Core should link only against libCore. This could be tricky
+  # to implement because some ROOT components create more than one library.
+  ROOT_EXECUTABLE(${benchmark} ${source_files} LIBRARIES ${ARG_LIBRARIES})
+  set_property(TARGET ${benchmark} PROPERTY RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+  target_link_libraries(${benchmark} gbenchmark)
+
+  ROOT_PATH_TO_STRING(mangled_name ${benchmark} PATH_SEPARATOR_REPLACEMENT "-")
+  ROOT_ADD_TEST(gbench${mangled_name}
+    COMMAND ${benchmark}
+    WORKING_DIR ${CMAKE_CURRENT_BINARY_DIR}
+    LABELS "benchmark")
+endfunction()
+
+#----------------------------------------------------------------------------
 # ROOT_ADD_UNITTEST_DIR(<libraries ...>)
 #----------------------------------------------------------------------------
 function(ROOT_ADD_UNITTEST_DIR)
@@ -1124,12 +1148,12 @@ endfunction()
 
 #----------------------------------------------------------------------------
 # function ROOT_ADD_GTEST(<testsuite> source1 source2... LIBRARIES)
-#
+#----------------------------------------------------------------------------
 function(ROOT_ADD_GTEST test_suite)
   CMAKE_PARSE_ARGUMENTS(ARG "" "" "LIBRARIES" ${ARGN})
   include_directories(${CMAKE_CURRENT_BINARY_DIR} ${GTEST_INCLUDE_DIR} ${GMOCK_INCLUDE_DIR})
-
-  set(source_files ${ARG_UNPARSED_ARGUMENTS})
+  
+  ROOT_GET_SOURCES(source_files . ${ARG_UNPARSED_ARGUMENTS})
   # Note we cannot use ROOT_EXECUTABLE without user-specified set of LIBRARIES to link with.
   # The test suites should choose this in their specific CMakeLists.txt file.
   # FIXME: For better coherence we could restrict the libraries the test suite could link
@@ -1142,7 +1166,6 @@ function(ROOT_ADD_GTEST test_suite)
   ROOT_PATH_TO_STRING(mangled_name ${test_suite} PATH_SEPARATOR_REPLACEMENT "-")
   ROOT_ADD_TEST(gtest${mangled_name} COMMAND ${test_suite} WORKING_DIR ${CMAKE_CURRENT_BINARY_DIR})
 endfunction()
-
 
 #----------------------------------------------------------------------------
 # ROOT_ADD_TEST_SUBDIRECTORY( <name> )

@@ -16,6 +16,7 @@
 #include "ROOT/TThreadExecutor.hxx"
 #endif
 #include "RtypesCore.h" // Long64_t
+#include "TInterpreter.h"
 #include "TROOT.h"      // IsImplicitMTEnabled
 #include "TTreeReader.h"
 
@@ -125,102 +126,156 @@ unsigned int TSlotStack::Pop()
 
 TLoopManager::TLoopManager(TTree *tree, const ColumnNames_t &defaultBranches)
    : fTree(std::shared_ptr<TTree>(tree, [](TTree *) {})), fDefaultBranches(defaultBranches),
-     fNSlots(TDFInternal::GetNSlots())
+     fNSlots(TDFInternal::GetNSlots()), fLoopType(ELoopType::kROOTFiles)
 {
 }
 
-TLoopManager::TLoopManager(Long64_t nEmptyEntries) : fNEmptyEntries(nEmptyEntries), fNSlots(TDFInternal::GetNSlots())
+TLoopManager::TLoopManager(Long64_t nEmptyEntries)
+   : fNEmptyEntries(nEmptyEntries), fNSlots(TDFInternal::GetNSlots()), fLoopType(ELoopType::kNoFiles)
 {
 }
 
+/// Run event loop with no source files, in parallel.
+void TLoopManager::RunEmptySourceMT()
+{
+#ifdef R__USE_IMT
+   TSlotStack slotStack(fNSlots);
+   // Working with an empty tree.
+   // Evenly partition the entries according to fNSlots
+   const auto nEntriesPerSlot = fNEmptyEntries / fNSlots;
+   auto remainder = fNEmptyEntries % fNSlots;
+   std::vector<std::pair<Long64_t, Long64_t>> entryRanges;
+   Long64_t start = 0;
+   while (start < fNEmptyEntries) {
+      Long64_t end = start + nEntriesPerSlot;
+      if (remainder > 0) {
+         ++end;
+         --remainder;
+      }
+      entryRanges.emplace_back(start, end);
+      start = end;
+   }
+
+   // Each task will generate a subrange of entries
+   auto genFunction = [this, &slotStack](const std::pair<Long64_t, Long64_t> &range) {
+      auto slot = slotStack.Pop();
+      InitAllNodes(nullptr, slot);
+      for (auto currEntry = range.first; currEntry < range.second; ++currEntry) {
+         RunAndCheckFilters(slot, currEntry);
+      }
+      slotStack.Push(slot);
+   };
+
+   ROOT::TThreadExecutor pool;
+   pool.Foreach(genFunction, entryRanges);
+
+#endif // not implemented otherwise
+}
+
+/// Run event loop with no source files, in sequence.
+void TLoopManager::RunEmptySource()
+{
+   InitAllNodes(nullptr, 0);
+   for (Long64_t currEntry = 0; currEntry < fNEmptyEntries && fNStopsReceived < fNChildren; ++currEntry) {
+      RunAndCheckFilters(0, currEntry);
+   }
+}
+
+/// Run event loop over one or multiple ROOT files, in parallel.
+void TLoopManager::RunTreeProcessorMT()
+{
+#ifdef R__USE_IMT
+   TSlotStack slotStack(fNSlots);
+   using ttpmt_t = ROOT::TTreeProcessorMT;
+   std::unique_ptr<ttpmt_t> tp;
+   tp.reset(new ttpmt_t(*fTree));
+
+   tp->Process([this, &slotStack](TTreeReader &r) -> void {
+      auto slot = slotStack.Pop();
+      InitAllNodes(&r, slot);
+      // recursive call to check filters and conditionally execute actions
+      while (r.Next()) {
+         RunAndCheckFilters(slot, r.GetCurrentEntry());
+      }
+      slotStack.Push(slot);
+   });
+#endif // not implemented otherwise
+}
+
+/// Run event loop over one or multiple ROOT files, in sequence.
+void TLoopManager::RunTreeReader()
+{
+   TTreeReader r(fTree.get());
+   InitAllNodes(&r, 0);
+
+   // recursive call to check filters and conditionally execute actions
+   // in the non-MT case processing can be stopped early by ranges, hence the check on fNStopsReceived
+   while (r.Next() && fNStopsReceived < fNChildren) {
+      RunAndCheckFilters(0, r.GetCurrentEntry());
+   }
+}
+
+/// Execute actions and make sure named filters are called for each event.
+/// Named filters must be called even if the analysis logic would not require it, lest they report confusing results.
 void TLoopManager::RunAndCheckFilters(unsigned int slot, Long64_t entry)
 {
    for (auto &actionPtr : fBookedActions) actionPtr->Run(slot, entry);
    for (auto &namedFilterPtr : fBookedNamedFilters) namedFilterPtr->CheckFilters(slot, entry);
 }
 
-void TLoopManager::Run()
+/// Perform clean-up operations. To be called at the end of each event loop.
+void TLoopManager::CleanUp()
 {
-#ifdef R__USE_IMT
-   if (ROOT::IsImplicitMTEnabled()) {
-      TSlotStack slotStack(fNSlots);
-      CreateSlots(fNSlots);
-
-      if (fNEmptyEntries > 0) {
-         // Working with an empty tree.
-         // Evenly partition the entries according to fNSlots
-         const auto nEntriesPerSlot = fNEmptyEntries / fNSlots;
-         auto remainder = fNEmptyEntries % fNSlots;
-         std::vector<std::pair<Long64_t, Long64_t>> entryRanges;
-         Long64_t start = 0;
-         while (start < fNEmptyEntries) {
-            Long64_t end = start + nEntriesPerSlot;
-            if (remainder > 0) {
-               ++end;
-               --remainder;
-            }
-            entryRanges.emplace_back(start, end);
-            start = end;
-         }
-
-         // Each task will generate a subrange of entries
-         auto genFunction = [this, &slotStack](const std::pair<Long64_t, Long64_t> &range) {
-            auto slot = slotStack.Pop();
-            InitAllNodes(nullptr, slot);
-            for (auto currEntry = range.first; currEntry < range.second; ++currEntry) {
-               RunAndCheckFilters(slot, currEntry);
-            }
-            slotStack.Push(slot);
-         };
-
-         ROOT::TThreadExecutor pool;
-         pool.Foreach(genFunction, entryRanges);
-      } else {
-         using ttpmt_t = ROOT::TTreeProcessorMT;
-         std::unique_ptr<ttpmt_t> tp;
-         tp.reset(new ttpmt_t(*fTree));
-
-         tp->Process([this, &slotStack](TTreeReader &r) -> void {
-            auto slot = slotStack.Pop();
-            InitAllNodes(&r, slot);
-            // recursive call to check filters and conditionally execute actions
-            while (r.Next()) {
-               RunAndCheckFilters(slot, r.GetCurrentEntry());
-            }
-            slotStack.Push(slot);
-         });
-      }
-   } else {
-#endif // R__USE_IMT
-      CreateSlots(1);
-      if (fNEmptyEntries > 0) {
-         InitAllNodes(nullptr, 0);
-         for (Long64_t currEntry = 0; currEntry < fNEmptyEntries && fNStopsReceived < fNChildren; ++currEntry) {
-            RunAndCheckFilters(0, currEntry);
-         }
-      } else {
-         TTreeReader r(fTree.get());
-         InitAllNodes(&r, 0);
-
-         // recursive call to check filters and conditionally execute actions
-         // in the non-MT case processing can be stopped early by ranges, hence the check on fNStopsReceived
-         while (r.Next() && fNStopsReceived < fNChildren) {
-            RunAndCheckFilters(0, r.GetCurrentEntry());
-         }
-      }
-#ifdef R__USE_IMT
-   }
-#endif // R__USE_IMT
-
    fHasRunAtLeastOnce = true;
-   // forget actions
+
+   // forget TActions and detach TResultProxies
    fBookedActions.clear();
-   // make all TResultProxies ready
    for (auto readiness : fResProxyReadiness) {
       *readiness.get() = true;
    }
-   // forget TResultProxies
    fResProxyReadiness.clear();
+
+   // reset children counts
+   fNChildren = 0;
+   fNStopsReceived = 0;
+   for (auto &ptr : fBookedFilters) ptr->ResetChildrenCount();
+   for (auto &ptr : fBookedRanges) ptr->ResetChildrenCount();
+   for (auto &pair : fBookedBranches) pair.second->ResetChildrenCount();
+}
+
+/// Start the event loop with a different mechanism depending on IMT/no IMT, data source/no data source.
+/// Also perform a few setup and clean-up operations (CreateSlots before running, clear booked actions after, etc.).
+void TLoopManager::Run()
+{
+   // jit-compile required actions
+   auto error = TInterpreter::EErrorCode::kNoError;
+   gInterpreter->ProcessLine(fToJit.c_str(), &error);
+   if (error) {
+      std::string exceptionText =
+         "An error occurred while jitting. The lines above might indicate the cause of the crash\n";
+      throw std::runtime_error(exceptionText.c_str());
+   }
+   fToJit.clear();
+
+   CreateSlots(fNSlots);
+
+#ifdef R__USE_IMT
+   if (ROOT::IsImplicitMTEnabled()) {
+      switch (fLoopType) {
+      case ELoopType::kNoFiles: RunEmptySourceMT(); break;
+      case ELoopType::kROOTFiles: RunTreeProcessorMT(); break;
+      }
+   } else {
+#endif // R__USE_IMT
+      switch (fLoopType) {
+      case ELoopType::kNoFiles: RunEmptySource(); break;
+      case ELoopType::kROOTFiles: RunTreeReader(); break;
+      }
+#ifdef R__USE_IMT
+   }
+#endif // R__USE_IMT
+
+   CleanUp();
 }
 
 /// Build TTreeReaderValues for all nodes

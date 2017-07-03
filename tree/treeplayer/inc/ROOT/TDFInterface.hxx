@@ -11,13 +11,11 @@
 #ifndef ROOT_TDF_TINTERFACE
 #define ROOT_TDF_TINTERFACE
 
-#include "ROOT/TBufferMerger.hxx"
 #include "ROOT/TResultProxy.hxx"
 #include "ROOT/TDFNodes.hxx"
 #include "ROOT/TDFActionHelpers.hxx"
 #include "ROOT/TDFUtils.hxx"
 #include "TChain.h"
-#include "TFile.h"
 #include "TH1.h" // For Histo actions
 #include "TH2.h" // For Histo actions
 #include "TH3.h" // For Histo actions
@@ -42,25 +40,104 @@ namespace TDF {
 using namespace ROOT::Experimental::TDF;
 using namespace ROOT::Detail::TDF;
 
-using TmpBranchBasePtr_t = std::shared_ptr<TCustomColumnBase>;
+/****** BuildAndBook overloads *******/
+// BuildAndBook builds a TAction with the right operation and books it with the TLoopManager
 
-template <typename TDFNode, typename ActionType, typename... BranchTypes, typename ActionResultType>
-void CallBuildAndBook(TDFNode *node, const ColumnNames_t &bl, unsigned int nSlots,
+// Generic filling (covers Histo2D, Histo3D, Profile1D and Profile2D actions, with and without weights)
+template <typename... BranchTypes, typename ActionType, typename ActionResultType, typename PrevNodeType>
+void BuildAndBook(const ColumnNames_t &bl, const std::shared_ptr<ActionResultType> &h, unsigned int nSlots,
+                  TLoopManager &loopManager, PrevNodeType &prevNode, ActionType *)
+{
+   using Helper_t = FillTOHelper<ActionResultType>;
+   using Action_t = TAction<Helper_t, PrevNodeType, TTraits::TypeList<BranchTypes...>>;
+   loopManager.Book(std::make_shared<Action_t>(Helper_t(h, nSlots), bl, prevNode));
+}
+
+// Histo1D filling (must handle the special case of distinguishing FillTOHelper and FillHelper
+template <typename... BranchTypes, typename PrevNodeType>
+void BuildAndBook(const ColumnNames_t &bl, const std::shared_ptr<::TH1D> &h, unsigned int nSlots,
+                  TLoopManager &loopManager, PrevNodeType &prevNode, ActionTypes::Histo1D *)
+{
+   auto hasAxisLimits = HistoUtils<::TH1D>::HasAxisLimits(*h);
+
+   if (hasAxisLimits) {
+      using Helper_t = FillTOHelper<::TH1D>;
+      using Action_t = TAction<Helper_t, PrevNodeType, TTraits::TypeList<BranchTypes...>>;
+      loopManager.Book(std::make_shared<Action_t>(Helper_t(h, nSlots), bl, prevNode));
+   } else {
+      using Helper_t = FillHelper;
+      using Action_t = TAction<Helper_t, PrevNodeType, TTraits::TypeList<BranchTypes...>>;
+      loopManager.Book(std::make_shared<Action_t>(Helper_t(h, nSlots), bl, prevNode));
+   }
+}
+
+// Min action
+template <typename BranchType, typename PrevNodeType>
+void BuildAndBook(const ColumnNames_t &bl, const std::shared_ptr<double> &minV, unsigned int nSlots,
+                  TLoopManager &loopManager, PrevNodeType &prevNode, ActionTypes::Min *)
+{
+   using Helper_t = MinHelper;
+   using Action_t = TAction<Helper_t, PrevNodeType, TTraits::TypeList<BranchType>>;
+   loopManager.Book(std::make_shared<Action_t>(Helper_t(minV, nSlots), bl, prevNode));
+}
+
+// Max action
+template <typename BranchType, typename PrevNodeType>
+void BuildAndBook(const ColumnNames_t &bl, const std::shared_ptr<double> &maxV, unsigned int nSlots,
+                  TLoopManager &loopManager, PrevNodeType &prevNode, ActionTypes::Max *)
+{
+   using Helper_t = MaxHelper;
+   using Action_t = TAction<Helper_t, PrevNodeType, TTraits::TypeList<BranchType>>;
+   loopManager.Book(std::make_shared<Action_t>(Helper_t(maxV, nSlots), bl, prevNode));
+}
+
+// Mean action
+template <typename BranchType, typename PrevNodeType>
+void BuildAndBook(const ColumnNames_t &bl, const std::shared_ptr<double> &meanV, unsigned int nSlots,
+                  TLoopManager &loopManager, PrevNodeType &prevNode, ActionTypes::Mean *)
+{
+   using Helper_t = MeanHelper;
+   using Action_t = TAction<Helper_t, PrevNodeType, TTraits::TypeList<BranchType>>;
+   loopManager.Book(std::make_shared<Action_t>(Helper_t(meanV, nSlots), bl, prevNode));
+}
+/****** end BuildAndBook ******/
+/// \endcond
+
+template <typename ActionType, typename... BranchTypes, typename PrevNodeType, typename ActionResultType>
+void CallBuildAndBook(PrevNodeType &prevNode, const ColumnNames_t &bl, unsigned int nSlots,
                       const std::shared_ptr<ActionResultType> &r)
 {
-   node->template BuildAndBook<BranchTypes...>(bl, r, nSlots, (ActionType *)nullptr);
+   // if we are here it means we are jitting, if we are jitting the loop manager must be alive
+   auto &loopManager = *prevNode.GetImplPtr();
+   BuildAndBook<BranchTypes...>(bl, r, nSlots, loopManager, prevNode, (ActionType *)nullptr);
+   auto rPtr = &r;
+   delete rPtr;
 }
 
 std::vector<std::string> GetUsedBranchesNames(const std::string, TObjArray *, const std::vector<std::string> &);
+
+using TmpBranchBasePtr_t = std::shared_ptr<TCustomColumnBase>;
 
 Long_t JitTransformation(void *thisPtr, const std::string &methodName, const std::string &nodeTypeName,
                          const std::string &name, const std::string &expression, TObjArray *branches,
                          const std::vector<std::string> &tmpBranches,
                          const std::map<std::string, TmpBranchBasePtr_t> &tmpBookedBranches, TTree *tree);
 
-void JitBuildAndBook(const ColumnNames_t &bl, const std::string &nodeTypename, void *thisPtr, const std::type_info &art,
-                     const std::type_info &at, const void *r, TTree *tree, unsigned int nSlots,
-                     const std::map<std::string, TmpBranchBasePtr_t> &tmpBranches);
+std::string JitBuildAndBook(const ColumnNames_t &bl, const std::string &prevNodeTypename, void *prevNode,
+                            const std::type_info &art, const std::type_info &at, const void *r, TTree *tree,
+                            unsigned int nSlots, const std::map<std::string, TmpBranchBasePtr_t> &tmpBranches);
+
+// allocate a shared_ptr on the heap, return a reference to it. the user is responsible of deleting the shared_ptr*.
+// this function is meant to only be used by TInterface's action methods, and should be deprecated as soon as we find
+// a better way to make jitting work: the problem it solves is that we need to pass the same shared_ptr to the Helper
+// object of each action and to the TResultProxy returned by the action. While the former is only instantiated when
+// the event loop is about to start, the latter has to be returned to the user as soon as the action is booked.
+// a heap allocated shared_ptr will stay alive long enough that at jitting time its address is still valid.
+template<typename T, typename...Args>
+std::shared_ptr<T> &MakeSharedOnHeap(Args&&...args) {
+   auto sharedPtrPtr = new std::shared_ptr<T>(std::make_shared<T>(std::forward<Args>(args)...));
+   return *sharedPtrPtr;
+}
 
 } // namespace TDF
 } // namespace Internal
@@ -82,6 +159,7 @@ namespace Experimental {
 namespace TDF {
 namespace TDFDetail = ROOT::Detail::TDF;
 namespace TDFInternal = ROOT::Internal::TDF;
+namespace TTraits = ROOT::TypeTraits;
 
 /**
 * \class ROOT::Experimental::TDF::TInterface
@@ -99,10 +177,6 @@ class TInterface {
    friend std::string cling::printValue(ROOT::Experimental::TDataFrame *tdf); // For a nice printing at the prompt
    template <typename T>
    friend class TInterface;
-   template <typename TDFNode, typename ActionType, typename... BranchTypes, typename ActionResultType>
-   friend void TDFInternal::CallBuildAndBook(TDFNode *, const TDFDetail::ColumnNames_t &, unsigned int nSlots,
-                                             const std::shared_ptr<ActionResultType> &);
-
 public:
    ////////////////////////////////////////////////////////////////////////////
    /// \brief Append a filter to the call graph.
@@ -129,11 +203,10 @@ public:
       TDFInternal::CheckFilter(f);
       auto df = GetDataFrameChecked();
       const ColumnNames_t &defBl = df->GetDefaultBranches();
-      auto nArgs = TDFInternal::TFunctionTraits<F>::Args_t::fgSize;
+      auto nArgs = TTraits::CallableTraits<F>::arg_types::list_size;
       const ColumnNames_t &actualBl = TDFInternal::PickBranchNames(nArgs, bn, defBl);
       using DFF_t = TDFDetail::TFilter<F, Proxied>;
       auto FilterPtr = std::make_shared<DFF_t>(std::move(f), actualBl, *fProxiedPtr, name);
-      fProxiedPtr->IncrChildrenCount();
       df->Book(FilterPtr);
       TInterface<TFilterBase> tdf_f(FilterPtr, fImplWeakPtr);
       return tdf_f;
@@ -178,15 +251,7 @@ public:
    /// Refer to the first overload of this method for the full documentation.
    TInterface<TFilterBase> Filter(std::string_view expression, std::string_view name = "")
    {
-      auto df = GetDataFrameChecked();
-      auto tree = df->GetTree();
-      auto branches = tree->GetListOfBranches();
-      auto tmpBranches = fProxiedPtr->GetTmpBranches();
-      auto tmpBookedBranches = df->GetBookedBranches();
-      const std::string expressionInt(expression);
-      const std::string nameInt(name);
-      auto retVal = TDFInternal::JitTransformation(this, "Filter", GetNodeTypeName(), nameInt, expressionInt, branches,
-                                                   tmpBranches, tmpBookedBranches, tree);
+      auto retVal = CallJitTransformation("Filter", name, expression);
       return *(TInterface<TFilterBase> *)retVal;
    }
 
@@ -217,12 +282,11 @@ public:
       auto df = GetDataFrameChecked();
       TDFInternal::CheckTmpBranch(name, df->GetTree());
       const ColumnNames_t &defBl = df->GetDefaultBranches();
-      auto nArgs = TDFInternal::TFunctionTraits<F>::Args_t::fgSize;
+      auto nArgs = TTraits::CallableTraits<F>::arg_types::list_size;
       const ColumnNames_t &actualBl = TDFInternal::PickBranchNames(nArgs, bl, defBl);
       using DFB_t = TDFDetail::TCustomColumn<F, Proxied>;
       const std::string nameInt(name);
       auto BranchPtr = std::make_shared<DFB_t>(nameInt, std::move(expression), actualBl, *fProxiedPtr);
-      fProxiedPtr->IncrChildrenCount();
       df->Book(BranchPtr);
       TInterface<TCustomColumnBase> tdf_b(BranchPtr, fImplWeakPtr);
       return tdf_b;
@@ -239,14 +303,7 @@ public:
    /// Refer to the first overload of this method for the full documentation.
    TInterface<TCustomColumnBase> Define(std::string_view name, std::string_view expression)
    {
-      auto df = GetDataFrameChecked();
-      auto tree = df->GetTree();
-      auto branches = tree->GetListOfBranches();
-      auto tmpBranches = fProxiedPtr->GetTmpBranches();
-      auto tmpBookedBranches = df->GetBookedBranches();
-      const std::string expressionInt(expression);
-      const std::string nameInt(name);
-      auto retVal = TDFInternal::JitTransformation(this, "Define", GetNodeTypeName(), nameInt, expressionInt, branches,tmpBranches, tmpBookedBranches, tree);
+      auto retVal = CallJitTransformation("Define", name, expression);
       return *(TInterface<TCustomColumnBase> *)retVal;
    }
 
@@ -259,10 +316,9 @@ public:
    ///
    /// This function returns a `TDataFrame` built with the output tree as a source.
    template <typename... BranchTypes>
-   TInterface<TLoopManager> Snapshot(std::string_view treename, std::string_view filename,
-                                     const ColumnNames_t &bnames)
+   TInterface<TLoopManager> Snapshot(std::string_view treename, std::string_view filename, const ColumnNames_t &bnames)
    {
-      using TypeInd_t = typename TDFInternal::TGenStaticSeq<sizeof...(BranchTypes)>::Type_t;
+      using TypeInd_t = TDFInternal::GenStaticSeq_t<sizeof...(BranchTypes)>;
       return SnapshotImpl<BranchTypes...>(treename, filename, bnames, TypeInd_t());
    }
 
@@ -274,29 +330,35 @@ public:
    ///
    /// This function returns a `TDataFrame` built with the output tree as a source.
    /// The types of the branches are automatically inferred and do not need to be specified.
-   TInterface<TLoopManager> Snapshot(std::string_view treename, std::string_view filename,
-                                     const ColumnNames_t &bnames)
+   TInterface<TLoopManager> Snapshot(std::string_view treename, std::string_view filename, const ColumnNames_t &bnames)
    {
       auto df = GetDataFrameChecked();
       auto tree = df->GetTree();
       std::stringstream snapCall;
       // build a string equivalent to
       // "reinterpret_cast</nodetype/*>(this)->Snapshot<Ts...>(treename,filename,*reinterpret_cast<ColumnNames_t*>(&bnames))"
-      snapCall << "if (gROOTMutex) gROOTMutex->UnLock(); ((" << GetNodeTypeName() << "*)" << this << ")->Snapshot<";
+      snapCall << "if (gROOTMutex) gROOTMutex->UnLock();";
+      snapCall << "reinterpret_cast<ROOT::Experimental::TDF::TInterface<" << GetNodeTypeName() << ">*>(" << this
+               << ")->Snapshot<";
       bool first = true;
       for (auto &b : bnames) {
          if (!first) snapCall << ", ";
          snapCall << TDFInternal::ColumnName2ColumnTypeName(b, tree, df->GetBookedBranch(b));
          first = false;
       };
-      // TODO is there a way to use ColumnNames_t instead of std::vector<std::string> without parsing the whole header?
       const std::string treeNameInt(treename);
       const std::string filenameInt(filename);
       snapCall << ">(\"" << treeNameInt << "\", \"" << filenameInt << "\", "
-               << "*reinterpret_cast<std::vector<std::string>*>(" << &bnames << ")"
-               << ");";
+               << "*reinterpret_cast<std::vector<std::string>*>(" // vector<string> should be ColumnNames_t
+               << &bnames << "));";
       // jit snapCall, return result
-      return *reinterpret_cast<TInterface<TLoopManager> *>(gInterpreter->ProcessLine(snapCall.str().c_str()));
+      TInterpreter::EErrorCode errorCode;
+      auto newTDFPtr = gInterpreter->ProcessLine(snapCall.str().c_str(), &errorCode);
+      if (TInterpreter::EErrorCode::kNoError != errorCode) {
+         std::string msg = "Cannot jit Snapshot call. Interpreter error code is " + std::to_string(errorCode) + ".";
+         throw std::runtime_error(msg);
+      }
+      return *reinterpret_cast<TInterface<TLoopManager> *>(newTDFPtr);
    }
 
    ////////////////////////////////////////////////////////////////////////////
@@ -316,7 +378,7 @@ public:
       const auto isEmptyRegex = 0 == theRegexSize;
       // This is to avoid cases where branches called b1, b2, b3 are all matched by expression "b"
       if (theRegexSize > 0 && theRegex[0] != '^') theRegex = "^" + theRegex;
-      if (theRegexSize > 0 && theRegex[theRegexSize-1] != '$') theRegex = theRegex + "$";
+      if (theRegexSize > 0 && theRegex[theRegexSize - 1] != '$') theRegex = theRegex + "$";
 
       ColumnNames_t selectedColumns;
       selectedColumns.reserve(32);
@@ -365,7 +427,6 @@ public:
       auto df = GetDataFrameChecked();
       using Range_t = TDFDetail::TRange<Proxied>;
       auto RangePtr = std::make_shared<Range_t>(start, stop, stride, *fProxiedPtr);
-      fProxiedPtr->IncrChildrenCount();
       df->Book(RangePtr);
       TInterface<TRangeBase> tdf_r(RangePtr, fImplWeakPtr);
       return tdf_r;
@@ -392,9 +453,9 @@ public:
    template <typename F>
    void Foreach(F f, const ColumnNames_t &bl = {})
    {
-      using Args_t = typename TDFInternal::TFunctionTraits<decltype(f)>::ArgsNoDecay_t;
-      using Ret_t = typename TDFInternal::TFunctionTraits<decltype(f)>::Ret_t;
-      ForeachSlot(TDFInternal::AddSlotParameter<Ret_t>(f, Args_t()), bl);
+      using arg_types = typename TTraits::CallableTraits<decltype(f)>::arg_types_nodecay;
+      using ret_type = typename TTraits::CallableTraits<decltype(f)>::ret_type;
+      ForeachSlot(TDFInternal::AddSlotParameter<ret_type>(f, arg_types()), bl);
    }
 
    ////////////////////////////////////////////////////////////////////////////
@@ -418,12 +479,11 @@ public:
    {
       auto df = GetDataFrameChecked();
       const ColumnNames_t &defBl = df->GetDefaultBranches();
-      auto nArgs = TDFInternal::TFunctionTraits<F>::Args_t::fgSize;
+      auto nArgs = TTraits::CallableTraits<F>::arg_types::list_size;
       const ColumnNames_t &actualBl = TDFInternal::PickBranchNames(nArgs - 1, bl, defBl);
-      using Op_t = TDFInternal::ForeachSlotHelper<F>;
-      using DFA_t = TDFInternal::TAction<Op_t, Proxied>;
-      df->Book(std::make_shared<DFA_t>(Op_t(std::move(f)), actualBl, *fProxiedPtr));
-      fProxiedPtr->IncrChildrenCount();
+      using Helper_t = TDFInternal::ForeachSlotHelper<F>;
+      using Action_t = TDFInternal::TAction<Helper_t, Proxied>;
+      df->Book(std::make_shared<Action_t>(Helper_t(std::move(f)), actualBl, *fProxiedPtr));
       df->Run();
    }
 
@@ -443,7 +503,7 @@ public:
    ///
    /// This action is *lazy*: upon invocation of this method the calculation is
    /// booked but not executed. See TResultProxy documentation.
-   template <typename F, typename T = typename TDFInternal::TFunctionTraits<F>::Ret_t>
+   template <typename F, typename T = typename TTraits::CallableTraits<F>::ret_type>
    TResultProxy<T> Reduce(F f, std::string_view branchName = {})
    {
       static_assert(std::is_default_constructible<T>::value,
@@ -460,19 +520,18 @@ public:
    /// \param[in] initValue The reduced object is initialised to this value rather than being default-constructed
    ///
    /// See the description of the other Reduce overload for more information.
-   template <typename F, typename T = typename TDFInternal::TFunctionTraits<F>::Ret_t>
+   template <typename F, typename T = typename TTraits::CallableTraits<F>::ret_type>
    TResultProxy<T> Reduce(F f, std::string_view branchName, const T &initValue)
    {
-      using Args_t = typename TDFInternal::TFunctionTraits<F>::Args_t;
-      TDFInternal::CheckReduce(f, Args_t());
+      using arg_types = typename TTraits::CallableTraits<F>::arg_types;
+      TDFInternal::CheckReduce(f, arg_types());
       auto df = GetDataFrameChecked();
       unsigned int nSlots = df->GetNSlots();
       auto bl = GetBranchNames<T>({branchName}, "reduce branch values");
       auto redObjPtr = std::make_shared<T>(initValue);
-      using Op_t = TDFInternal::ReduceHelper<F, T>;
-      using DFA_t = typename TDFInternal::TAction<Op_t, Proxied>;
-      df->Book(std::make_shared<DFA_t>(Op_t(std::move(f), redObjPtr, nSlots), bl, *fProxiedPtr));
-      fProxiedPtr->IncrChildrenCount();
+      using Helper_t = TDFInternal::ReduceHelper<F, T>;
+      using Action_t = typename TDFInternal::TAction<Helper_t, Proxied>;
+      df->Book(std::make_shared<Action_t>(Helper_t(std::move(f), redObjPtr, nSlots), bl, *fProxiedPtr));
       return MakeResultProxy(redObjPtr, df);
    }
 
@@ -486,10 +545,9 @@ public:
       auto df = GetDataFrameChecked();
       unsigned int nSlots = df->GetNSlots();
       auto cSPtr = std::make_shared<unsigned int>(0);
-      using Op_t = TDFInternal::CountHelper;
-      using DFA_t = TDFInternal::TAction<Op_t, Proxied>;
-      df->Book(std::make_shared<DFA_t>(Op_t(cSPtr, nSlots), ColumnNames_t({}), *fProxiedPtr));
-      fProxiedPtr->IncrChildrenCount();
+      using Helper_t = TDFInternal::CountHelper;
+      using Action_t = TDFInternal::TAction<Helper_t, Proxied>;
+      df->Book(std::make_shared<Action_t>(Helper_t(cSPtr, nSlots), ColumnNames_t({}), *fProxiedPtr));
       return MakeResultProxy(cSPtr, df);
    }
 
@@ -508,10 +566,9 @@ public:
       unsigned int nSlots = df->GetNSlots();
       auto bl = GetBranchNames<T>({branchName}, "get the values of the branch");
       auto valuesPtr = std::make_shared<COLL>();
-      using Op_t = TDFInternal::TakeHelper<T, COLL>;
-      using DFA_t = TDFInternal::TAction<Op_t, Proxied>;
-      df->Book(std::make_shared<DFA_t>(Op_t(valuesPtr, nSlots), bl, *fProxiedPtr));
-      fProxiedPtr->IncrChildrenCount();
+      using Helper_t = TDFInternal::TakeHelper<T, COLL>;
+      using Action_t = TDFInternal::TAction<Helper_t, Proxied>;
+      df->Book(std::make_shared<Action_t>(Helper_t(valuesPtr, nSlots), bl, *fProxiedPtr));
       return MakeResultProxy(valuesPtr, df);
    }
 
@@ -530,19 +587,19 @@ public:
    /// booked but not executed. See TResultProxy documentation.
    /// The user gives up ownership of the model histogram.
    template <typename V = TDFDetail::TInferType>
-   TResultProxy<::TH1F> Histo1D(::TH1F &&model = ::TH1F{"", "", 128u, 0., 0.}, std::string_view vName = "")
+   TResultProxy<::TH1D> Histo1D(::TH1D &&model = ::TH1D{"", "", 128u, 0., 0.}, std::string_view vName = "")
    {
       auto bl = GetBranchNames<V>({vName}, "fill the histogram");
-      auto h = std::make_shared<::TH1F>(std::move(model));
+      auto &h = TDFInternal::MakeSharedOnHeap<::TH1D>(std::move(model));
       if (h->GetXaxis()->GetXmax() == h->GetXaxis()->GetXmin())
-         TDFInternal::HistoUtils<::TH1F>::SetCanExtendAllAxes(*h);
+         TDFInternal::HistoUtils<::TH1D>::SetCanExtendAllAxes(*h);
       return CreateAction<TDFInternal::ActionTypes::Histo1D, V>(bl, h);
    }
 
    template <typename V = TDFDetail::TInferType>
-   TResultProxy<::TH1F> Histo1D(std::string_view vName)
+   TResultProxy<::TH1D> Histo1D(std::string_view vName)
    {
-      return Histo1D<V>(::TH1F{"", "", 128u, 0., 0.}, vName);
+      return Histo1D<V>(::TH1D{"", "", 128u, 0., 0.}, vName);
    }
 
    ////////////////////////////////////////////////////////////////////////////
@@ -561,21 +618,21 @@ public:
    /// booked but not executed. See TResultProxy documentation.
    /// The user gives up ownership of the model histogram.
    template <typename V = TDFDetail::TInferType, typename W = TDFDetail::TInferType>
-   TResultProxy<::TH1F> Histo1D(::TH1F &&model, std::string_view vName, std::string_view wName)
+   TResultProxy<::TH1D> Histo1D(::TH1D &&model, std::string_view vName, std::string_view wName)
    {
       auto bl = GetBranchNames<V, W>({vName, wName}, "fill the histogram");
-      auto h = std::make_shared<::TH1F>(std::move(model));
+      auto &h = TDFInternal::MakeSharedOnHeap<::TH1D>(std::move(model));
       return CreateAction<TDFInternal::ActionTypes::Histo1D, V, W>(bl, h);
    }
 
    template <typename V = TDFDetail::TInferType, typename W = TDFDetail::TInferType>
-   TResultProxy<::TH1F> Histo1D(std::string_view vName, std::string_view wName)
+   TResultProxy<::TH1D> Histo1D(std::string_view vName, std::string_view wName)
    {
-      return Histo1D<V, W>(::TH1F{"", "", 128u, 0., 0.}, vName, wName);
+      return Histo1D<V, W>(::TH1D{"", "", 128u, 0., 0.}, vName, wName);
    }
 
    template <typename V, typename W>
-   TResultProxy<::TH1F> Histo1D(::TH1F &&model = ::TH1F{"", "", 128u, 0., 0.})
+   TResultProxy<::TH1D> Histo1D(::TH1D &&model = ::TH1D{"", "", 128u, 0., 0.})
    {
       return Histo1D<V, W>(std::move(model), "", "");
    }
@@ -592,10 +649,10 @@ public:
    /// booked but not executed. See TResultProxy documentation.
    /// The user gives up ownership of the model histogram.
    template <typename V1 = TDFDetail::TInferType, typename V2 = TDFDetail::TInferType>
-   TResultProxy<::TH2F> Histo2D(::TH2F &&model, std::string_view v1Name = "", std::string_view v2Name = "")
+   TResultProxy<::TH2D> Histo2D(::TH2D &&model, std::string_view v1Name = "", std::string_view v2Name = "")
    {
-      auto h = std::make_shared<::TH2F>(std::move(model));
-      if (!TDFInternal::HistoUtils<::TH2F>::HasAxisLimits(*h)) {
+      auto &h = TDFInternal::MakeSharedOnHeap<::TH2D>(std::move(model));
+      if (!TDFInternal::HistoUtils<::TH2D>::HasAxisLimits(*h)) {
          throw std::runtime_error("2D histograms with no axes limits are not supported yet.");
       }
       auto bl = GetBranchNames<V1, V2>({v1Name, v2Name}, "fill the histogram");
@@ -617,11 +674,11 @@ public:
    /// The user gives up ownership of the model histogram.
    template <typename V1 = TDFDetail::TInferType, typename V2 = TDFDetail::TInferType,
              typename W = TDFDetail::TInferType>
-   TResultProxy<::TH2F> Histo2D(::TH2F &&model, std::string_view v1Name, std::string_view v2Name,
+   TResultProxy<::TH2D> Histo2D(::TH2D &&model, std::string_view v1Name, std::string_view v2Name,
                                 std::string_view wName)
    {
-      auto h = std::make_shared<::TH2F>(std::move(model));
-      if (!TDFInternal::HistoUtils<::TH2F>::HasAxisLimits(*h)) {
+      auto &h = TDFInternal::MakeSharedOnHeap<::TH2D>(std::move(model));
+      if (!TDFInternal::HistoUtils<::TH2D>::HasAxisLimits(*h)) {
          throw std::runtime_error("2D histograms with no axes limits are not supported yet.");
       }
       auto bl = GetBranchNames<V1, V2, W>({v1Name, v2Name, wName}, "fill the histogram");
@@ -629,7 +686,7 @@ public:
    }
 
    template <typename V1, typename V2, typename W>
-   TResultProxy<::TH2F> Histo2D(::TH2F &&model)
+   TResultProxy<::TH2D> Histo2D(::TH2D &&model)
    {
       return Histo2D<V1, V2, W>(std::move(model), "", "", "");
    }
@@ -649,11 +706,11 @@ public:
    /// The user gives up ownership of the model histogram.
    template <typename V1 = TDFDetail::TInferType, typename V2 = TDFDetail::TInferType,
              typename V3 = TDFDetail::TInferType>
-   TResultProxy<::TH3F> Histo3D(::TH3F &&model, std::string_view v1Name = "", std::string_view v2Name = "",
+   TResultProxy<::TH3D> Histo3D(::TH3D &&model, std::string_view v1Name = "", std::string_view v2Name = "",
                                 std::string_view v3Name = "")
    {
-      auto h = std::make_shared<::TH3F>(std::move(model));
-      if (!TDFInternal::HistoUtils<::TH3F>::HasAxisLimits(*h)) {
+      auto &h = TDFInternal::MakeSharedOnHeap<::TH3D>(std::move(model));
+      if (!TDFInternal::HistoUtils<::TH3D>::HasAxisLimits(*h)) {
          throw std::runtime_error("3D histograms with no axes limits are not supported yet.");
       }
       auto bl = GetBranchNames<V1, V2, V3>({v1Name, v2Name, v3Name}, "fill the histogram");
@@ -677,11 +734,11 @@ public:
    /// The user gives up ownership of the model histogram.
    template <typename V1 = TDFDetail::TInferType, typename V2 = TDFDetail::TInferType,
              typename V3 = TDFDetail::TInferType, typename W = TDFDetail::TInferType>
-   TResultProxy<::TH3F> Histo3D(::TH3F &&model, std::string_view v1Name, std::string_view v2Name,
+   TResultProxy<::TH3D> Histo3D(::TH3D &&model, std::string_view v1Name, std::string_view v2Name,
                                 std::string_view v3Name, std::string_view wName)
    {
-      auto h = std::make_shared<::TH3F>(std::move(model));
-      if (!TDFInternal::HistoUtils<::TH3F>::HasAxisLimits(*h)) {
+      auto &h = TDFInternal::MakeSharedOnHeap<::TH3D>(std::move(model));
+      if (!TDFInternal::HistoUtils<::TH3D>::HasAxisLimits(*h)) {
          throw std::runtime_error("3D histograms with no axes limits are not supported yet.");
       }
       auto bl = GetBranchNames<V1, V2, V3, W>({v1Name, v2Name, v3Name, wName}, "fill the histogram");
@@ -689,7 +746,7 @@ public:
    }
 
    template <typename V1, typename V2, typename V3, typename W>
-   TResultProxy<::TH3F> Histo3D(::TH3F &&model)
+   TResultProxy<::TH3D> Histo3D(::TH3D &&model)
    {
       return Histo3D<V1, V2, V3, W>(std::move(model), "", "", "", "");
    }
@@ -706,10 +763,9 @@ public:
    /// booked but not executed. See TResultProxy documentation.
    /// The user gives up ownership of the model profile object.
    template <typename V1 = TDFDetail::TInferType, typename V2 = TDFDetail::TInferType>
-   TResultProxy<::TProfile> Profile1D(::TProfile &&model, std::string_view v1Name = "",
-                                      std::string_view v2Name = "")
+   TResultProxy<::TProfile> Profile1D(::TProfile &&model, std::string_view v1Name = "", std::string_view v2Name = "")
    {
-      auto h = std::make_shared<::TProfile>(std::move(model));
+      auto &h = TDFInternal::MakeSharedOnHeap<::TProfile>(std::move(model));
       if (!TDFInternal::HistoUtils<::TProfile>::HasAxisLimits(*h)) {
          throw std::runtime_error("Profiles with no axes limits are not supported yet.");
       }
@@ -735,7 +791,7 @@ public:
    TResultProxy<::TProfile> Profile1D(::TProfile &&model, std::string_view v1Name, std::string_view v2Name,
                                       std::string_view wName)
    {
-      auto h = std::make_shared<::TProfile>(std::move(model));
+      auto &h = TDFInternal::MakeSharedOnHeap<::TProfile>(std::move(model));
       if (!TDFInternal::HistoUtils<::TProfile>::HasAxisLimits(*h)) {
          throw std::runtime_error("Profile histograms with no axes limits are not supported yet.");
       }
@@ -767,7 +823,7 @@ public:
    TResultProxy<::TProfile2D> Profile2D(::TProfile2D &&model, std::string_view v1Name = "",
                                         std::string_view v2Name = "", std::string_view v3Name = "")
    {
-      auto h = std::make_shared<::TProfile2D>(std::move(model));
+      auto &h = TDFInternal::MakeSharedOnHeap<::TProfile2D>(std::move(model));
       if (!TDFInternal::HistoUtils<::TProfile2D>::HasAxisLimits(*h)) {
          throw std::runtime_error("2D profiles with no axes limits are not supported yet.");
       }
@@ -795,7 +851,7 @@ public:
    TResultProxy<::TProfile2D> Profile2D(::TProfile2D &&model, std::string_view v1Name, std::string_view v2Name,
                                         std::string_view v3Name, std::string_view wName)
    {
-      auto h = std::make_shared<::TProfile2D>(std::move(model));
+      auto &h = TDFInternal::MakeSharedOnHeap<::TProfile2D>(std::move(model));
       if (!TDFInternal::HistoUtils<::TProfile2D>::HasAxisLimits(*h)) {
          throw std::runtime_error("2D profiles with no axes limits are not supported yet.");
       }
@@ -823,7 +879,7 @@ public:
    template <typename FirstBranch, typename... OtherBranches, typename T> // need FirstBranch to disambiguate overloads
    TResultProxy<T> Fill(T &&model, const ColumnNames_t &bl)
    {
-      auto h = std::make_shared<T>(std::move(model));
+      auto &h = TDFInternal::MakeSharedOnHeap<T>(std::move(model));
       if (!TDFInternal::HistoUtils<T>::HasAxisLimits(*h)) {
          throw std::runtime_error("The absence of axes limits is not supported yet.");
       }
@@ -833,7 +889,7 @@ public:
    template <typename T>
    TResultProxy<T> Fill(T &&model, const ColumnNames_t &bl)
    {
-      auto h = std::make_shared<T>(std::move(model));
+      auto &h = TDFInternal::MakeSharedOnHeap<T>(std::move(model));
       if (!TDFInternal::HistoUtils<T>::HasAxisLimits(*h)) {
          throw std::runtime_error("The absence of axes limits is not supported yet.");
       }
@@ -853,7 +909,7 @@ public:
    TResultProxy<double> Min(std::string_view branchName = "")
    {
       auto bl = GetBranchNames<T>({branchName}, "calculate the minimum");
-      auto minV = std::make_shared<double>(std::numeric_limits<double>::max());
+      auto &minV = TDFInternal::MakeSharedOnHeap<double>(std::numeric_limits<double>::max());
       return CreateAction<TDFInternal::ActionTypes::Min, T>(bl, minV);
    }
 
@@ -870,7 +926,7 @@ public:
    TResultProxy<double> Max(std::string_view branchName = "")
    {
       auto bl = GetBranchNames<T>({branchName}, "calculate the maximum");
-      auto maxV = std::make_shared<double>(std::numeric_limits<double>::min());
+      auto &maxV = TDFInternal::MakeSharedOnHeap<double>(std::numeric_limits<double>::min());
       return CreateAction<TDFInternal::ActionTypes::Max, T>(bl, maxV);
    }
 
@@ -887,7 +943,7 @@ public:
    TResultProxy<double> Mean(std::string_view branchName = "")
    {
       auto bl = GetBranchNames<T>({branchName}, "calculate the mean");
-      auto meanV = std::make_shared<double>(0);
+      auto &meanV = TDFInternal::MakeSharedOnHeap<double>(0);
       return CreateAction<TDFInternal::ActionTypes::Mean, T>(bl, meanV);
    }
 
@@ -908,11 +964,26 @@ public:
    }
 
 private:
-   inline const char *GetNodeTypeName() { return ""; };
+   Long_t CallJitTransformation(std::string_view transformation, std::string_view nodeName, std::string_view expression)
+   {
+      auto df = GetDataFrameChecked();
+      auto tree = df->GetTree();
+      auto branches = tree ? tree->GetListOfBranches() : nullptr;
+      auto tmpBranches = fProxiedPtr->GetTmpBranches();
+      auto tmpBookedBranches = df->GetBookedBranches();
+      const std::string transformInt(transformation);
+      const std::string nameInt(nodeName);
+      const std::string expressionInt(expression);
+      const auto thisTypeName = "ROOT::Experimental::TDF::TInterface<" + GetNodeTypeName() + ">";
+      return TDFInternal::JitTransformation(this, transformInt, thisTypeName, nameInt, expressionInt, branches,
+                                            tmpBranches, tmpBookedBranches, tree);
+   }
+
+   inline std::string GetNodeTypeName();
 
    /// Returns the default branches if needed, takes care of the error handling.
    template <typename T1, typename T2 = void, typename T3 = void, typename T4 = void>
-   ColumnNames_t GetBranchNames(const std::vector<std::string_view>& bl, std::string_view actionNameForErr)
+   ColumnNames_t GetBranchNames(const std::vector<std::string_view> &bl, std::string_view actionNameForErr)
    {
       constexpr auto isT2Void = std::is_same<T2, void>::value;
       constexpr auto isT3Void = std::is_same<T3, void>::value;
@@ -933,76 +1004,6 @@ private:
       return GetDefaultBranchNames(neededBranches, actionNameForErr);
    }
 
-   /// \cond HIDDEN_SYMBOLS
-
-   /****** BuildAndBook overloads *******/
-   // BuildAndBook builds a TAction with the right operation and book it with the TLoopManager
-
-   // Generic filling (covers Histo2D, Histo3D, Profile1D and Profile2D actions, with and without weights)
-   template <typename... BranchTypes, typename ActionType, typename ActionResultType>
-   void BuildAndBook(const ColumnNames_t &bl, const std::shared_ptr<ActionResultType> &h, unsigned int nSlots,
-                     ActionType *)
-   {
-      using Op_t = TDFInternal::FillTOHelper<ActionResultType>;
-      using DFA_t = TDFInternal::TAction<Op_t, Proxied, TDFInternal::TTypeList<BranchTypes...>>;
-      auto df = GetDataFrameChecked();
-      df->Book(std::make_shared<DFA_t>(Op_t(h, nSlots), bl, *fProxiedPtr));
-   }
-
-   // Histo1D filling (must handle the special case of distinguishing FillTOHelper and FillHelper
-   template <typename... BranchTypes>
-   void BuildAndBook(const ColumnNames_t &bl, const std::shared_ptr<::TH1F> &h, unsigned int nSlots,
-                     TDFInternal::ActionTypes::Histo1D *)
-   {
-      auto df = GetDataFrameChecked();
-      auto hasAxisLimits = TDFInternal::HistoUtils<::TH1F>::HasAxisLimits(*h);
-
-      if (hasAxisLimits) {
-         using Op_t = TDFInternal::FillTOHelper<::TH1F>;
-         using DFA_t = TDFInternal::TAction<Op_t, Proxied, TDFInternal::TTypeList<BranchTypes...>>;
-         df->Book(std::make_shared<DFA_t>(Op_t(h, nSlots), bl, *fProxiedPtr));
-      } else {
-         using Op_t = TDFInternal::FillHelper;
-         using DFA_t = TDFInternal::TAction<Op_t, Proxied, TDFInternal::TTypeList<BranchTypes...>>;
-         df->Book(std::make_shared<DFA_t>(Op_t(h, nSlots), bl, *fProxiedPtr));
-      }
-   }
-
-   // Min action
-   template <typename BranchType>
-   void BuildAndBook(const ColumnNames_t &bl, const std::shared_ptr<double> &minV, unsigned int nSlots,
-                     TDFInternal::ActionTypes::Min *)
-   {
-      using Op_t = TDFInternal::MinHelper;
-      using DFA_t = TDFInternal::TAction<Op_t, Proxied, TDFInternal::TTypeList<BranchType>>;
-      auto df = GetDataFrameChecked();
-      df->Book(std::make_shared<DFA_t>(Op_t(minV, nSlots), bl, *fProxiedPtr));
-   }
-
-   // Max action
-   template <typename BranchType>
-   void BuildAndBook(const ColumnNames_t &bl, const std::shared_ptr<double> &maxV, unsigned int nSlots,
-                     TDFInternal::ActionTypes::Max *)
-   {
-      using Op_t = TDFInternal::MaxHelper;
-      using DFA_t = TDFInternal::TAction<Op_t, Proxied, TDFInternal::TTypeList<BranchType>>;
-      auto df = GetDataFrameChecked();
-      df->Book(std::make_shared<DFA_t>(Op_t(maxV, nSlots), bl, *fProxiedPtr));
-   }
-
-   // Mean action
-   template <typename BranchType>
-   void BuildAndBook(const ColumnNames_t &bl, const std::shared_ptr<double> &meanV, unsigned int nSlots,
-                     TDFInternal::ActionTypes::Mean *)
-   {
-      using Op_t = TDFInternal::MeanHelper;
-      using DFA_t = TDFInternal::TAction<Op_t, Proxied, TDFInternal::TTypeList<BranchType>>;
-      auto df = GetDataFrameChecked();
-      df->Book(std::make_shared<DFA_t>(Op_t(meanV, nSlots), bl, *fProxiedPtr));
-   }
-   /****** end BuildAndBook ******/
-   /// \endcond
-
    // Type was specified by the user, no need to infer it
    template <typename ActionType, typename... BranchTypes, typename ActionResultType,
              typename std::enable_if<!TDFInternal::TNeedJitting<BranchTypes...>::value, int>::type = 0>
@@ -1010,8 +1011,7 @@ private:
    {
       auto df = GetDataFrameChecked();
       unsigned int nSlots = df->GetNSlots();
-      BuildAndBook<BranchTypes...>(bl, r, nSlots, (ActionType *)nullptr);
-      fProxiedPtr->IncrChildrenCount();
+      TDFInternal::BuildAndBook<BranchTypes...>(bl, r, nSlots, *df, *fProxiedPtr, (ActionType *)nullptr);
       return MakeResultProxy(r, df);
    }
 
@@ -1024,10 +1024,86 @@ private:
       unsigned int nSlots = df->GetNSlots();
       const auto &tmpBranches = df->GetBookedBranches();
       auto tree = df->GetTree();
-      TDFInternal::JitBuildAndBook(bl, GetNodeTypeName(), this, typeid(std::shared_ptr<ActionResultType>),
-                                   typeid(ActionType), &r, tree, nSlots, tmpBranches);
-      fProxiedPtr->IncrChildrenCount();
+      auto toJit = TDFInternal::JitBuildAndBook(bl, GetNodeTypeName(), fProxiedPtr.get(),
+                                                typeid(std::shared_ptr<ActionResultType>), typeid(ActionType), &r, tree,
+                                                nSlots, tmpBranches);
+      df->Jit(toJit);
       return MakeResultProxy(r, df);
+   }
+
+   ////////////////////////////////////////////////////////////////////////////
+   /// \brief Implementation of snapshot
+   /// \param[in] treename The name of the TTree
+   /// \param[in] filename The name of the TFile
+   /// \param[in] bnames The list of names of the branches to be written
+   /// The implementation exploits Foreach. The association of the addresses to
+   /// the branches takes place at the first event. This is possible because
+   /// since there are no copies, the address of the value passed by reference
+   /// is the address pointing to the storage of the read/created object in/by
+   /// the TTreeReaderValue/TemporaryBranch
+   template <typename... BranchTypes, int... S>
+   TInterface<TLoopManager> SnapshotImpl(std::string_view treename, std::string_view filename,
+                                         const ColumnNames_t &bnames, TDFInternal::StaticSeq<S...> /*dummy*/)
+   {
+      // check for input sanity
+      const auto templateParamsN = sizeof...(S);
+      const auto bNamesN = bnames.size();
+      if (templateParamsN != bNamesN) {
+         std::string err_msg = "The number of template parameters specified for the snapshot is ";
+         err_msg += std::to_string(templateParamsN);
+         err_msg += " while ";
+         err_msg += std::to_string(bNamesN);
+         err_msg += " branches have been specified.";
+         throw std::runtime_error(err_msg.c_str());
+      }
+
+      // split name into directory and treename if needed
+      auto getDirTreeName = [](std::string_view treePath) {
+         auto lastSlash = treePath.rfind('/');
+         std::string_view treeDir, treeName;
+         if (std::string_view::npos != lastSlash) {
+            treeDir = treePath.substr(0,lastSlash);
+            treeName = treePath.substr(lastSlash+1,treePath.size());
+         } else {
+            treeName = treePath;
+         }
+         // need to convert to string for TTree and TDirectory ctors anyway
+         return std::make_pair(std::string(treeDir), std::string(treeName));
+      };
+      std::string treenameInt;
+      std::string dirnameInt;
+      std::tie(dirnameInt, treenameInt) = getDirTreeName(treename);
+
+      auto df = GetDataFrameChecked();
+      const std::string filenameInt(filename);
+      std::shared_ptr<TDFInternal::TActionBase> actionPtr;
+
+      if (!ROOT::IsImplicitMTEnabled()) {
+         // single-thread snapshot
+         using Helper_t = TDFInternal::SnapshotHelper<BranchTypes...>;
+         using Action_t = TDFInternal::TAction<Helper_t, Proxied, TTraits::TypeList<BranchTypes...>>;
+         actionPtr.reset(new Action_t(Helper_t(filenameInt, dirnameInt, treenameInt, bnames), bnames, *fProxiedPtr));
+      } else {
+         // multi-thread snapshot
+         using Helper_t = TDFInternal::SnapshotHelperMT<BranchTypes...>;
+         using Action_t = TDFInternal::TAction<Helper_t, Proxied>;
+         actionPtr.reset(new Action_t(Helper_t(df->GetNSlots(), filenameInt, dirnameInt, treenameInt, bnames), bnames,
+                                      *fProxiedPtr));
+      }
+      df->Book(std::move(actionPtr));
+      df->Run();
+
+      // create new TDF
+      ::TDirectory::TContext ctxt;
+      std::string fullTreeNameInt(treename);
+      // Now we mimic a constructor for the TDataFrame. We cannot invoke it here
+      // since this would introduce a cyclic headers dependency.
+      TInterface<TLoopManager> snapshotTDF(std::make_shared<TLoopManager>(nullptr, bnames));
+      auto chain = new TChain(fullTreeNameInt.c_str()); // TODO comment on ownership of this TChain
+      chain->Add(filenameInt.c_str());
+      snapshotTDF.fProxiedPtr->SetTree(std::shared_ptr<TTree>(static_cast<TTree *>(chain)));
+
+      return snapshotTDF;
    }
 
 protected:
@@ -1061,121 +1137,6 @@ protected:
       return ColumnNames_t(bnBegin, bnBegin + nExpectedBranches);
    }
 
-   ////////////////////////////////////////////////////////////////////////////
-   /// \brief Implementation of snapshot
-   /// \param[in] treename The name of the TTree
-   /// \param[in] filename The name of the TFile
-   /// \param[in] bnames The list of names of the branches to be written
-   /// The implementation exploits Foreach. The association of the addresses to
-   /// the branches takes place at the first event. This is possible because
-   /// since there are no copies, the address of the value passed by reference
-   /// is the address pointing to the storage of the read/created object in/by
-   /// the TTreeReaderValue/TemporaryBranch
-   template <typename... Args, int... S>
-   TInterface<TLoopManager> SnapshotImpl(std::string_view treename, std::string_view filename,
-                                         const ColumnNames_t &bnames, TDFInternal::TStaticSeq<S...> /*dummy*/)
-   {
-      const std::string treenameInt(treename);
-      const std::string filenameInt(filename);
-      const auto templateParamsN = sizeof...(S);
-      const auto bNamesN = bnames.size();
-      if (templateParamsN != bNamesN) {
-         std::string err_msg = "The number of template parameters specified for the snapshot is ";
-         err_msg += std::to_string(templateParamsN);
-         err_msg += " while ";
-         err_msg += std::to_string(bNamesN);
-         err_msg += " branches have been specified.";
-         throw std::runtime_error(err_msg.c_str());
-      }
-
-      auto df = GetDataFrameChecked();
-      if (!ROOT::IsImplicitMTEnabled()) {
-         std::unique_ptr<TFile> ofile(TFile::Open(filenameInt.c_str(), "RECREATE"));
-         TTree t(treenameInt.c_str(), treenameInt.c_str());
-
-         bool FirstEvent = true;
-         // TODO move fillTree and initLambda to SnapshotHelper's body
-         auto fillTree = [&t, &bnames, &FirstEvent](unsigned int /* slot */, Args &... args) {
-            if (FirstEvent) {
-               // hack to call TTree::Branch on all variadic template arguments
-               std::initializer_list<int> expander = {(t.Branch(bnames[S].c_str(), &args), 0)..., 0};
-               (void)expander; // avoid unused variable warnings for older compilers such as gcc 4.9
-               FirstEvent = false;
-            }
-            t.Fill();
-         };
-
-         auto initLambda = [&t] (TTreeReader *r, unsigned int /* slot */) {
-            if(r) {
-               // not an empty-source TDF
-               auto tree = r->GetTree();
-               tree->AddClone(&t);
-            }
-         };
-
-         using Op_t = TDFInternal::SnapshotHelper<decltype(initLambda), decltype(fillTree)>;
-         using DFA_t = TDFInternal::TAction<Op_t, Proxied>;
-         df->Book(std::make_shared<DFA_t>(Op_t(std::move(initLambda), std::move(fillTree)), bnames, *fProxiedPtr));
-         fProxiedPtr->IncrChildrenCount();
-         df->Run();
-         t.Write();
-      } else {
-         unsigned int nSlots = df->GetNSlots();
-         TBufferMerger merger(filenameInt.c_str(), "RECREATE");
-         std::vector<std::shared_ptr<TBufferMergerFile>> files(nSlots);
-         std::vector<TTree *> trees(nSlots); // ROOT owns/manages these TTrees
-         std::vector<int> isFirstEvent(nSlots, 1); // vector<bool> is evil
-
-         auto fillTree = [&](unsigned int slot, Args &... args) {
-            if (isFirstEvent[slot]) {
-               // hack to call TTree::Branch on all variadic template arguments
-               std::initializer_list<int> expander = {(trees[slot]->Branch(bnames[S].c_str(), &args), 0)..., 0};
-               (void)expander; // avoid unused variable warnings for older compilers such as gcc 4.9
-               isFirstEvent[slot] = 0;
-            }
-            trees[slot]->Fill();
-            auto entries = trees[slot]->GetEntries();
-            auto autoflush = trees[slot]->GetAutoFlush();
-            if ((autoflush > 0) && (entries % autoflush == 0)) files[slot]->Write();
-         };
-
-         // called at the beginning of each task
-         auto initLambda = [&trees, &merger, &files, &treenameInt, &isFirstEvent] (TTreeReader *r, unsigned int slot) {
-            if(!trees[slot]) {
-               // first time this thread executes something, let's create a TBufferMerger output directory
-               files[slot] = merger.GetFile();
-            } else {
-               files[slot]->Write();
-            }
-            trees[slot] = new TTree(treenameInt.c_str(), treenameInt.c_str());
-            trees[slot]->ResetBit(kMustCleanup);
-            if(r) {
-               // not an empty-source TDF
-               auto tree = r->GetTree();
-               tree->AddClone(trees[slot]);
-            }
-            isFirstEvent[slot] = 1;
-         };
-
-         using Op_t = TDFInternal::SnapshotHelper<decltype(initLambda), decltype(fillTree)>;
-         using DFA_t = TDFInternal::TAction<Op_t, Proxied>;
-         df->Book(std::make_shared<DFA_t>(Op_t(std::move(initLambda), std::move(fillTree)), bnames, *fProxiedPtr));
-         fProxiedPtr->IncrChildrenCount();
-         df->Run();
-         for (auto &&file : files) file->Write();
-      }
-
-      ::TDirectory::TContext ctxt;
-      // Now we mimic a constructor for the TDataFrame. We cannot invoke it here
-      // since this would introduce a cyclic headers dependency.
-      TInterface<TLoopManager> snapshotTDF(std::make_shared<TLoopManager>(nullptr, bnames));
-      auto chain = new TChain(treenameInt.c_str());
-      chain->Add(filenameInt.c_str());
-      snapshotTDF.fProxiedPtr->SetTree(std::shared_ptr<TTree>(static_cast<TTree *>(chain)));
-
-      return snapshotTDF;
-   }
-
    TInterface(const std::shared_ptr<Proxied> &proxied, const std::weak_ptr<TLoopManager> &impl)
       : fProxiedPtr(proxied), fImplWeakPtr(impl)
    {
@@ -1187,32 +1148,32 @@ protected:
    {
    }
 
-   std::shared_ptr<Proxied> fProxiedPtr;
+   const std::shared_ptr<Proxied> fProxiedPtr;
    std::weak_ptr<TLoopManager> fImplWeakPtr;
 };
 
 template <>
-inline const char *TInterface<TDFDetail::TFilterBase>::GetNodeTypeName()
+inline std::string TInterface<TDFDetail::TFilterBase>::GetNodeTypeName()
 {
-   return "ROOT::Experimental::TDF::TInterface<ROOT::Detail::TDF::TFilterBase>";
+   return "ROOT::Detail::TDF::TFilterBase";
 }
 
 template <>
-inline const char *TInterface<TDFDetail::TCustomColumnBase>::GetNodeTypeName()
+inline std::string TInterface<TDFDetail::TCustomColumnBase>::GetNodeTypeName()
 {
-   return "ROOT::Experimental::TDF::TInterface<ROOT::Detail::TDF::TCustomColumnBase>";
+   return "ROOT::Detail::TDF::TCustomColumnBase";
 }
 
 template <>
-inline const char *TInterface<TDFDetail::TLoopManager>::GetNodeTypeName()
+inline std::string TInterface<TDFDetail::TLoopManager>::GetNodeTypeName()
 {
-   return "ROOT::Experimental::TDF::TInterface<ROOT::Detail::TDF::TLoopManager>";
+   return "ROOT::Detail::TDF::TLoopManager";
 }
 
 template <>
-inline const char *TInterface<TDFDetail::TRangeBase>::GetNodeTypeName()
+inline std::string TInterface<TDFDetail::TRangeBase>::GetNodeTypeName()
 {
-   return "ROOT::Experimental::TDF::TInterface<ROOT::Detail::TDF::TRangeBase>";
+   return "ROOT::Detail::TDF::TRangeBase";
 }
 
 } // end NS TDF
