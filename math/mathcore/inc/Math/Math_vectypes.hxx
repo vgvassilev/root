@@ -11,8 +11,6 @@
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wall"
-#pragma GCC diagnostic ignored "-Wunused-parameter"
-#pragma GCC diagnostic ignored "-Wconditional-uninitialized"
 #include <VecCore/VecCore>
 #pragma GCC diagnostic pop
 
