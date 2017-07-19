@@ -1599,8 +1599,10 @@ if (testing)
   # Add google benchmarking tools.
   ExternalProject_Add(
     googlebenchmark
-    GIT_REPOSITORY https://github.com/google/benchmark.git
-    GIT_TAG master
+    GIT_REPOSITORY https://github.com/vgvassilev/benchmark
+    GIT_TAG AddHTMLReport2
+    #GIT_REPOSITORY https://github.com/google/benchmark.git
+    #GIT_TAG master
     UPDATE_COMMAND ""
     # TIMEOUT 10
     # # Force separate output paths for debug and release builds to allow easy
