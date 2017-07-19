@@ -21,8 +21,15 @@ namespace ROOT {
 namespace Experimental {
 
 TBufferMerger::TBufferMerger(const char *name, Option_t *option, Int_t compress)
-   : fName(name), fOption(option), fCompress(compress),
-     fMergingThread(new std::thread([&]() { this->WriteOutputFile(); }))
+   : TBufferMerger(std::unique_ptr<TFile>(TFile::Open(name, option, /*title*/ name, compress)))
+{
+   if (!fOutputFile) {
+      Error("OutputFile", "cannot open the MERGER output file %s", name);
+   }
+}
+
+TBufferMerger::TBufferMerger(std::unique_ptr<TFile> output)
+   : fOutputFile(output.release()), fMergingThread(new std::thread([&]() { this->WriteOutputFile(); }))
 {
 }
 
@@ -64,7 +71,7 @@ void TBufferMerger::WriteOutputFile()
 
    {
       R__LOCKGUARD(gROOTMutex);
-      merger.OutputFile(fName.c_str(), fOption.c_str(), fCompress);
+      merger.OutputFile(std::unique_ptr<TFile>(fOutputFile)); // Takes ownership.
    }
 
    while (true) {
@@ -86,7 +93,7 @@ void TBufferMerger::WriteOutputFile()
          TDirectory::TContext ctxt;
          {
             R__LOCKGUARD(gROOTMutex);
-            memfile.reset(new TMemFile(fName.c_str(), buffer->Buffer() + buffer->Length(), length, "read"));
+            memfile.reset(new TMemFile(fOutputFile->GetName(), buffer->Buffer() + buffer->Length(), length, "read"));
             buffer->SetBufferOffset(buffer->Length() + length);
             merger.AddFile(memfile.get(), false);
             merger.PartialMerge();
