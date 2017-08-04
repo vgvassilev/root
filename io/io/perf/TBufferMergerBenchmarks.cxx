@@ -9,9 +9,14 @@
 #include <random>
 #include <string>
 #include <sstream>
+#include <cstdlib>
+#include <iostream>
+#include <ctime>
+#include <experimental/filesystem>
 #include <sys/stat.h>
 
 using namespace ROOT::Experimental;
+namespace fs = std::experimental::filesystem;
 
 static void BM_TBufferFile_CreateEmpty(benchmark::State &state)
 {
@@ -32,7 +37,7 @@ static void BM_TBufferFile_GetFile(benchmark::State &state)
       // FIXME: We should have a way to pass an externally constructed file or stream to
       // TFile*, this would allow us to create in-memory files and avoid killing disks
       // when we benchmark IO.
-      Merger = new TBufferMerger(std::unique_ptr<TMemFile>(new TMemFile("virtual_file.root", "RECREATE")));
+      Merger = new TBufferMerger(std::unique_ptr<TMemFile>(new TMemFile("/mnt/tmpfs/virtual_file.root", "RECREATE")));
    }
    while (state.KeepRunning()) {
       // Run the test as normal.
@@ -48,7 +53,7 @@ BENCHMARK(BM_TBufferFile_GetFile)->Unit(benchmark::kMicrosecond)->UseRealTime()-
 BENCHMARK(BM_TBufferFile_GetFile)->Unit(benchmark::kMicrosecond)->UseRealTime()->ThreadRange(1, 256);
 
 /// Creates a TMemFile, fills a TTree with random numbers. The data is written if it exceeds 32MB.
-inline void FillTreeWithRandomData(TBufferMerger &merger, size_t nEntriesPerWorker = 24 * 1024, int flush = 32 )
+inline void FillTreeWithRandomData(TBufferMerger &merger, size_t nEntriesPerWorker = 24 * 1024, int flush = 32, size_t nBranches = 1)
 {
    thread_local std::default_random_engine g;
    std::uniform_real_distribution<double> dist(0.0, 1.0);
@@ -57,14 +62,19 @@ inline void FillTreeWithRandomData(TBufferMerger &merger, size_t nEntriesPerWork
    auto t = new TTree("random", "random");
    t->ResetBit(kMustCleanup);
    t->SetAutoFlush(-(flush) * 1024 * 1024); // Flush at exceeding 32MB
-
-   double rng;
-
-   t->Branch("random", &rng);
-
+   
+   std::vector<double> rnd;
+   rnd.reserve(nBranches);
+   for (size_t b = 0; b < nBranches; ++b){
+      std::stringstream ss;
+      ss << b;
+      std::string nameBranch = "random" + ss.str();
+      t->Branch(nameBranch.c_str(), &rnd[b]);
+   }
    long entries = 0;
    for (size_t i = 0; i < nEntriesPerWorker; ++i) {
-      rng = dist(g);
+      for (auto v : rnd)
+         v = dist(g);
       t->Fill();
       ++entries;
       auto atflush = t->GetAutoFlush();
@@ -82,23 +92,35 @@ static void BM_TBufferFile_FillTreeWithRandomData(benchmark::State &state)
    using namespace ROOT::Experimental;
    if (state.thread_index == 0) {
       // Setup code here.
-      Merger = new TBufferMerger(std::unique_ptr<TMemFile>(new TMemFile("virtual_file.root", "RECREATE")));
+      // FIXME: temporary path for testing on KNL
+      //Merger = new TBufferMerger(std::unique_ptr<TMemFile>(new TMemFile("/mnt/tmpfs/virtual_file.root", "RECREATE")));
+      Merger = new TBufferMerger(std::unique_ptr<TFile>(new TFile("/mnt/tmpfs/virtual_file.root", "RECREATE")));
    }
    int flush = state.range(0);
-   while (state.KeepRunning())
-      FillTreeWithRandomData(*Merger, flush);
+   int br = state.range(1);
+   while (state.KeepRunning()){
+      FillTreeWithRandomData(*Merger, flush, br);
+      //Merger->GetFile()->ResetAfterMerge(0);
+   }
    auto size = Merger->GetFile()->GetSize();
+   fs::path p = "/mnt/tmpfs/virtual_file.root";
    std::stringstream ss;
-   ss << size;
+   if (!p.empty()){
+      auto size_fs = fs::file_size(p);
+      ss << size_fs;
+   }
    state.SetLabel(ss.str());
    if (state.thread_index == 0) {
       // Teardown code here.
-      delete Merger;
+      // FIXME: cleanups problem
+      //delete Merger;
    }
 }
+
+
 BENCHMARK(BM_TBufferFile_FillTreeWithRandomData)->Unit(benchmark::kMicrosecond)->Arg(32);
 BENCHMARK(BM_TBufferFile_FillTreeWithRandomData)->Unit(benchmark::kMicrosecond)->Arg(32)->UseRealTime()->ThreadPerCpu();
-BENCHMARK(BM_TBufferFile_FillTreeWithRandomData)->Unit(benchmark::kMicrosecond)->Range(1, 32)->UseRealTime()->ThreadRange(1, 256);
-
+BENCHMARK(BM_TBufferFile_FillTreeWithRandomData)->Unit(benchmark::kMicrosecond)->Ranges({{1, 8}, {1, 5}})->UseRealTime()->ThreadRange(1, 256);
+BENCHMARK(BM_TBufferFile_FillTreeWithRandomData)->Unit(benchmark::kMicrosecond)->Ranges({{32, 128}, {1, 5}})->UseRealTime()->ThreadRange(1, 256);
 // Define our main.
 BENCHMARK_MAIN();
