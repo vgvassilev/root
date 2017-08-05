@@ -57,7 +57,6 @@ inline void FillTreeWithRandomData(TBufferMerger &merger, size_t nEntriesPerWork
 {
    thread_local std::default_random_engine g;
    std::uniform_real_distribution<double> dist(0.0, 1.0);
-
    auto f = merger.GetFile();
    auto t = new TTree("random", "random");
    t->ResetBit(kMustCleanup);
@@ -73,8 +72,8 @@ inline void FillTreeWithRandomData(TBufferMerger &merger, size_t nEntriesPerWork
    }
    long entries = 0;
    for (size_t i = 0; i < nEntriesPerWorker; ++i) {
-      for (auto v : rnd)
-         v = dist(g);
+      for (auto &v : rnd)
+         rnd[v] = dist(g);
       t->Fill();
       ++entries;
       auto atflush = t->GetAutoFlush();
@@ -99,8 +98,8 @@ static void BM_TBufferFile_FillTreeWithRandomData(benchmark::State &state)
    int flush = state.range(0);
    int br = state.range(1);
    while (state.KeepRunning()){
-      FillTreeWithRandomData(*Merger, flush, br);
-      //Merger->GetFile()->ResetAfterMerge(0);
+      FillTreeWithRandomData(*Merger, 24*1024, flush, br);
+      Merger->GetFile()->ResetAfterMerge(0);
    }
    auto size = Merger->GetFile()->GetSize();
    fs::path p = "/mnt/tmpfs/virtual_file.root";
@@ -117,10 +116,9 @@ static void BM_TBufferFile_FillTreeWithRandomData(benchmark::State &state)
    }
 }
 
-
-BENCHMARK(BM_TBufferFile_FillTreeWithRandomData)->Unit(benchmark::kMicrosecond)->Arg(32);
-BENCHMARK(BM_TBufferFile_FillTreeWithRandomData)->Unit(benchmark::kMicrosecond)->Arg(32)->UseRealTime()->ThreadPerCpu();
-BENCHMARK(BM_TBufferFile_FillTreeWithRandomData)->Unit(benchmark::kMicrosecond)->Ranges({{1, 8}, {1, 5}})->UseRealTime()->ThreadRange(1, 256);
-BENCHMARK(BM_TBufferFile_FillTreeWithRandomData)->Unit(benchmark::kMicrosecond)->Ranges({{32, 128}, {1, 5}})->UseRealTime()->ThreadRange(1, 256);
+BENCHMARK(BM_TBufferFile_FillTreeWithRandomData)->Unit(benchmark::kMicrosecond)->Args({32,1});
+BENCHMARK(BM_TBufferFile_FillTreeWithRandomData)->Unit(benchmark::kMicrosecond)->Args({32,1})->UseRealTime()->ThreadPerCpu();
+BENCHMARK(BM_TBufferFile_FillTreeWithRandomData)->Unit(benchmark::kMicrosecond)->Ranges({{1, 8}, {1, 8}})->UseRealTime()->ThreadRange(1, 256);
+BENCHMARK(BM_TBufferFile_FillTreeWithRandomData)->Unit(benchmark::kMicrosecond)->Ranges({{32, 128}, {1, 8}})->UseRealTime()->ThreadRange(1, 256);
 // Define our main.
 BENCHMARK_MAIN();
