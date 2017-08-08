@@ -18,26 +18,26 @@ using namespace HistFactory;
 void buildBinnedTest()
 {
    Measurement meas("meas","meas");
-   meas.SetPOI( "SignalStrength" );
-   meas.SetLumi( 1.0 );
+   meas.SetPOI("SignalStrength");
+   meas.SetLumi(1.0);
    meas.SetLumiRelErr( 0.10 );
    meas.AddConstantParam("Lumi");
-   Channel chan( "Region0" );
+   Channel chan("Region0");
    auto Signal_Hist = new TH1F("Signal","Signal",100,0,100);
    auto Background_Hist = new TH1F("Background","Background",100,0,100);
    auto Data_Hist = new TH1F("Data","Data",100,0,100);
    int nbins = Signal_Hist->GetXaxis()->GetNbins();
-   for (int bin = 1; bin <= nbins; ++bin ){
-      for (int i = 0; i <= bin; ++i ){
+   for (int bin = 1; bin <= nbins; ++bin){
+      for (int i = 0; i <= bin; ++i){
          Signal_Hist->Fill(bin + 0.5);
          Data_Hist->Fill(bin + 0.5);
       }
-     for (int i = 0; i <= 100; ++i ){
+     for (int i = 0; i <= 100; ++i){
         Background_Hist->Fill(bin + 0.5);
         Data_Hist->Fill(bin + 0.5);
        }
    }
-   chan.SetData( Data_Hist );
+   chan.SetData(Data_Hist);
    Sample background("background");
    background.SetNormalizeByTheory(false);
    background.SetHisto( Background_Hist );
@@ -56,21 +56,24 @@ void buildBinnedTest()
 
 static void BM_RooFit_BinnedTestMigrad(benchmark::State &state)
 {  
-   RooMsgService::instance().setGlobalKillBelow(RooFit::INFO);
-   gErrorIgnoreLevel = kWarning;
+   gErrorIgnoreLevel = kInfo;
+   RooMsgService::instance().getStream(1).removeTopic(RooFit::Minimization);
+   RooMsgService::instance().getStream(1).removeTopic(RooFit::NumIntegration);
+   RooMsgService::instance().getStream(1).removeTopic(RooFit::Eval);
    int cpu = state.range(0);
-   TFile *infile = TFile::Open("workspace.root");
-   if(!infile->IsOpen()){
+   TFile *infile = new TFile("workspace.root");
+   if(infile->IsZombie()){
      buildBinnedTest();
      std::cout << "Workspace for tests was created!" << std::endl;
-     infile->TFile::Open("workspace.root");
    }
+   infile = TFile::Open("workspace.root");
    RooWorkspace *w = static_cast<RooWorkspace*>(infile->Get("BinnedWorkspace"));
    RooAbsData *data = w->data("obsData");
    ModelConfig *mc = static_cast<ModelConfig*>(w->genobj("ModelConfig"));
    RooAbsPdf *pdf = w->pdf(mc->GetPdf()->GetName());
-   RooAbsReal *nll = pdf->createNLL(*data, NumCPU(cpu,0));
+   RooAbsReal *nll = pdf->createNLL(*data, NumCPU(cpu, 0));
    RooMinimizer m(*nll);
+   m.setPrintLevel(-1);
    m.setStrategy(0);
    m.setProfile(1);
    while (state.KeepRunning()){
@@ -78,58 +81,64 @@ static void BM_RooFit_BinnedTestMigrad(benchmark::State &state)
    }
 }
 
-BENCHMARK(BM_RooFit_BinnedTestMigrad)->Unit(benchmark::kMicrosecond)->Arg(2);
-//BENCHMARK(BM_RooFit_BinnedTestMigrad)->Unit(benchmark::kMicrosecond)->Arg(2)->UseRealTime()->ThreadPerCpu();
-//BENCHMARK(BM_RooFit_BinnedTestMigrad)->Unit(benchmark::kMicrosecond)->Range(1, 5)->UseRealTime()->ThreadRange(1, 256);
-//BENCHMARK(BM_RooFit_BinnedTestMigrad)->Unit(benchmark::kMicrosecond)->Ranges({{32, 128}, {1, 5}})->UseRealTime()->ThreadRange(1, 256);
+BENCHMARK(BM_RooFit_BinnedTestMigrad)->Unit(benchmark::kMicrosecond)->Arg(2)->UseRealTime();
+BENCHMARK(BM_RooFit_BinnedTestMigrad)->Unit(benchmark::kMicrosecond)->Range(5, 15)->UseRealTime();
 
 static void BM_RooFit_BinnedTestHesse(benchmark::State &state)
 {  
-   RooMsgService::instance().setGlobalKillBelow(RooFit::INFO);
-   gErrorIgnoreLevel = kWarning;
-   TFile *infile = TFile::Open("workspace.root");
-   if(!infile->IsOpen()){
+   gErrorIgnoreLevel = kInfo;
+   RooMsgService::instance().getStream(1).removeTopic(RooFit::Minimization);
+   RooMsgService::instance().getStream(1).removeTopic(RooFit::NumIntegration);
+   RooMsgService::instance().getStream(1).removeTopic(RooFit::Eval);
+   TFile *infile = new TFile("workspace.root");
+   if(infile->IsZombie()){
       buildBinnedTest();
       std::cout << "Workspace for tests was created!" << std::endl;
-      infile->TFile::Open("workspace.root");
    }
+   infile->TFile::Open("workspace.root");
    RooWorkspace *w = static_cast<RooWorkspace*>(infile->Get("BinnedWorkspace"));
    RooAbsData *data = w->data("obsData");
    ModelConfig *mc = static_cast<ModelConfig*>(w->genobj("ModelConfig"));
    RooAbsPdf *pdf = w->pdf(mc->GetPdf()->GetName());
-   RooAbsReal *nll = pdf->createNLL(*data, NumCPU(2,0));
+   RooAbsReal *nll = pdf->createNLL(*data, NumCPU(2, 0));
    RooMinimizer m(*nll);
+   m.setPrintLevel(-1);
    m.setStrategy(0);
    m.setProfile(1);
    m.migrad();
-   while (state.KeepRunning())
+   while (state.KeepRunning()){
       m.hesse();
+  }
 }
-BENCHMARK(BM_RooFit_BinnedTestHesse)->Unit(benchmark::kMicrosecond);
+BENCHMARK(BM_RooFit_BinnedTestHesse)->Unit(benchmark::kMicrosecond)->UseRealTime();
 
 static void BM_RooFit_BinnedTestMinos(benchmark::State &state)
 {  
-   RooMsgService::instance().setGlobalKillBelow(RooFit::INFO);
-   gErrorIgnoreLevel = kWarning;
-   TFile *infile = TFile::Open("workspace.root");
-   if(!infile->IsOpen()){
+   gErrorIgnoreLevel = kInfo;
+   RooMsgService::instance().getStream(1).removeTopic(RooFit::Minimization);
+   RooMsgService::instance().getStream(1).removeTopic(RooFit::NumIntegration);
+   RooMsgService::instance().getStream(1).removeTopic(RooFit::Eval);
+   TFile *infile = new TFile("workspace.root");
+   if(infile->IsZombie()){
       buildBinnedTest();
       std::cout << "Workspace for tests was created!" << std::endl;
-      infile->TFile::Open("workspace.root");
    }
+   infile->TFile::Open("workspace.root");
    RooWorkspace *w = static_cast<RooWorkspace*>(infile->Get("BinnedWorkspace"));
    RooAbsData *data = w->data("obsData");
    ModelConfig *mc = static_cast<ModelConfig*>(w->genobj("ModelConfig"));
    RooAbsPdf *pdf = w->pdf(mc->GetPdf()->GetName());
-   RooAbsReal *nll = pdf->createNLL(*data, NumCPU(2,0));
+   RooAbsReal *nll = pdf->createNLL(*data, NumCPU(2, 0));
    RooMinimizer m(*nll);
+   m.setPrintLevel(-1);
    m.setStrategy(0);
    m.setProfile(1);
    m.migrad();
-   while (state.KeepRunning())
+   while (state.KeepRunning()){
       m.minos();
+   }
 }
 
-BENCHMARK(BM_RooFit_BinnedTestMinos)->Unit(benchmark::kMicrosecond);
+BENCHMARK(BM_RooFit_BinnedTestMinos)->Unit(benchmark::kMicrosecond)->UseRealTime();
 
 BENCHMARK_MAIN();
