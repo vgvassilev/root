@@ -76,6 +76,7 @@ static void BM_RooFit_BinnedTestMigrad(benchmark::State &state)
    m.setPrintLevel(-1);
    m.setStrategy(0);
    m.setProfile(1);
+   m.setLogFile("benchlog");
    while (state.KeepRunning()){
       m.migrad();
    }
@@ -105,6 +106,7 @@ static void BM_RooFit_BinnedTestHesse(benchmark::State &state)
    m.setPrintLevel(-1);
    m.setStrategy(0);
    m.setProfile(1);
+   m.setLogFile("bench0log");
    m.migrad();
    while (state.KeepRunning()){
       m.hesse();
@@ -133,6 +135,7 @@ static void BM_RooFit_BinnedTestMinos(benchmark::State &state)
    m.setPrintLevel(-1);
    m.setStrategy(0);
    m.setProfile(1);
+   m.setLogFile("bench1log");
    m.migrad();
    while (state.KeepRunning()){
       m.minos();
