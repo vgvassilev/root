@@ -54,7 +54,7 @@ void buildBinnedTest()
    RooWorkspace *ws = hist2workspace.MakeSingleChannelModel(meas, chan);
    auto iter = ws->components().fwdIterator() ;
    RooAbsArg* arg;
-   while (arg = iter.next()) {
+   while ((arg = iter.next())) {
       if (arg->IsA() == RooRealSumPdf::Class()) {
       arg->setAttribute("BinnedLikelihood");
       std::cout << "component " << arg->GetName() << " is a binned likelihood" << std::endl ;
@@ -86,14 +86,21 @@ static void BM_RooFit_BinnedTestMigrad(benchmark::State &state)
    m.setPrintLevel(-1);
    m.setStrategy(0);
    m.setProfile(1);
-   m.setLogFile("benchlog");
+   m.setLogFile("benchmigradlog");
    while (state.KeepRunning()){
       m.migrad();
    }
+   delete data;
+   delete infile;
+   delete mc;
+   delete pdf;
+   delete nll;
 }
 
 //BENCHMARK(BM_RooFit_BinnedTestMigrad)->Unit(benchmark::kMicrosecond)->Arg(2)->UseRealTime();
-BENCHMARK(BM_RooFit_BinnedTestMigrad)->Range(8, 128)->UseRealTime();
+// KNL scaling
+//BENCHMARK(BM_RooFit_BinnedTestMigrad)->Range(8, 128)->UseRealTime();
+BENCHMARK(BM_RooFit_BinnedTestMigrad)->Range(4, 8)->UseRealTime();
 
 static void BM_RooFit_BinnedTestHesse(benchmark::State &state)
 {  
@@ -117,13 +124,20 @@ static void BM_RooFit_BinnedTestHesse(benchmark::State &state)
    m.setPrintLevel(-1);
    m.setStrategy(0);
    m.setProfile(1);
-   m.setLogFile("bench0log");
+   m.setLogFile("benchhesselog");
    m.migrad();
    while (state.KeepRunning()){
       m.hesse();
-  }
+   }
+   delete data;
+   delete infile;
+   delete mc;
+   delete pdf;
+   delete nll;
 }
-BENCHMARK(BM_RooFit_BinnedTestHesse)->Range(8, 128)->UseRealTime();
+// KNL scaling
+//BENCHMARK(BM_RooFit_BinnedTestHesse)->Range(8, 128)->UseRealTime();
+BENCHMARK(BM_RooFit_BinnedTestHesse)->Range(4, 8)->UseRealTime();
 
 static void BM_RooFit_BinnedTestMinos(benchmark::State &state)
 {  
@@ -147,13 +161,19 @@ static void BM_RooFit_BinnedTestMinos(benchmark::State &state)
    m.setPrintLevel(-1);
    m.setStrategy(0);
    m.setProfile(1);
-   m.setLogFile("bench1log");
+   m.setLogFile("benchminoslog");
    m.migrad();
    while (state.KeepRunning()){
       m.minos();
    }
+   delete data;
+   delete infile;
+   delete mc;
+   delete pdf;
+   delete nll;
 }
-
-BENCHMARK(BM_RooFit_BinnedTestMinos)->Range(8, 128)->UseRealTime();
+// KNL scaling
+//BENCHMARK(BM_RooFit_BinnedTestMinos)->Range(8, 128)->UseRealTime();
+BENCHMARK(BM_RooFit_BinnedTestMinos)->Range(4, 8)->UseRealTime();
 
 BENCHMARK_MAIN();
