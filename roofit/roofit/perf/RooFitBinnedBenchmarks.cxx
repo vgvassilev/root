@@ -8,6 +8,8 @@
 #include "RooStats/HistFactory/Measurement.h"
 #include "RooStats/HistFactory/HistoToWorkspaceFactoryFast.h"
 #include "RooStats/ModelConfig.h"
+#include "RooLinkedListIter.h"
+#include "RooRealSumPdf.h"
 
 #include "benchmark/benchmark.h"
 
@@ -50,6 +52,14 @@ void buildBinnedTest()
    meas.AddChannel(chan);
    HistoToWorkspaceFactoryFast hist2workspace(meas);
    RooWorkspace *ws = hist2workspace.MakeSingleChannelModel(meas, chan);
+   auto iter = ws->components().fwdIterator() ;
+   RooAbsArg* arg;
+   while (arg = iter.next()) {
+      if (arg->IsA() == RooRealSumPdf::Class()) {
+      arg->setAttribute("BinnedLikelihood");
+      std::cout << "component " << arg->GetName() << " is a binned likelihood" << std::endl ;
+      }
+   }
    ws->SetName("BinnedWorkspace");
    ws->writeToFile("workspace.root");
 }
@@ -82,8 +92,8 @@ static void BM_RooFit_BinnedTestMigrad(benchmark::State &state)
    }
 }
 
-BENCHMARK(BM_RooFit_BinnedTestMigrad)->Unit(benchmark::kMicrosecond)->Arg(2)->UseRealTime();
-BENCHMARK(BM_RooFit_BinnedTestMigrad)->Unit(benchmark::kMicrosecond)->Range(5, 15)->UseRealTime();
+//BENCHMARK(BM_RooFit_BinnedTestMigrad)->Unit(benchmark::kMicrosecond)->Arg(2)->UseRealTime();
+BENCHMARK(BM_RooFit_BinnedTestMigrad)->Range(8, 128)->UseRealTime();
 
 static void BM_RooFit_BinnedTestHesse(benchmark::State &state)
 {  
@@ -91,6 +101,7 @@ static void BM_RooFit_BinnedTestHesse(benchmark::State &state)
    RooMsgService::instance().getStream(1).removeTopic(RooFit::Minimization);
    RooMsgService::instance().getStream(1).removeTopic(RooFit::NumIntegration);
    RooMsgService::instance().getStream(1).removeTopic(RooFit::Eval);
+   int cpu = state.range(0);
    TFile *infile = new TFile("workspace.root");
    if(infile->IsZombie()){
       buildBinnedTest();
@@ -101,7 +112,7 @@ static void BM_RooFit_BinnedTestHesse(benchmark::State &state)
    RooAbsData *data = w->data("obsData");
    ModelConfig *mc = static_cast<ModelConfig*>(w->genobj("ModelConfig"));
    RooAbsPdf *pdf = w->pdf(mc->GetPdf()->GetName());
-   RooAbsReal *nll = pdf->createNLL(*data, NumCPU(2, 0));
+   RooAbsReal *nll = pdf->createNLL(*data, NumCPU(cpu, 0));
    RooMinimizer m(*nll);
    m.setPrintLevel(-1);
    m.setStrategy(0);
@@ -112,7 +123,7 @@ static void BM_RooFit_BinnedTestHesse(benchmark::State &state)
       m.hesse();
   }
 }
-BENCHMARK(BM_RooFit_BinnedTestHesse)->Unit(benchmark::kMicrosecond)->UseRealTime();
+BENCHMARK(BM_RooFit_BinnedTestHesse)->Range(8, 128)->UseRealTime();
 
 static void BM_RooFit_BinnedTestMinos(benchmark::State &state)
 {  
@@ -120,6 +131,7 @@ static void BM_RooFit_BinnedTestMinos(benchmark::State &state)
    RooMsgService::instance().getStream(1).removeTopic(RooFit::Minimization);
    RooMsgService::instance().getStream(1).removeTopic(RooFit::NumIntegration);
    RooMsgService::instance().getStream(1).removeTopic(RooFit::Eval);
+   int cpu = state.range(0);
    TFile *infile = new TFile("workspace.root");
    if(infile->IsZombie()){
       buildBinnedTest();
@@ -130,7 +142,7 @@ static void BM_RooFit_BinnedTestMinos(benchmark::State &state)
    RooAbsData *data = w->data("obsData");
    ModelConfig *mc = static_cast<ModelConfig*>(w->genobj("ModelConfig"));
    RooAbsPdf *pdf = w->pdf(mc->GetPdf()->GetName());
-   RooAbsReal *nll = pdf->createNLL(*data, NumCPU(2, 0));
+   RooAbsReal *nll = pdf->createNLL(*data, NumCPU(cpu, 0));
    RooMinimizer m(*nll);
    m.setPrintLevel(-1);
    m.setStrategy(0);
@@ -142,6 +154,6 @@ static void BM_RooFit_BinnedTestMinos(benchmark::State &state)
    }
 }
 
-BENCHMARK(BM_RooFit_BinnedTestMinos)->Unit(benchmark::kMicrosecond)->UseRealTime();
+BENCHMARK(BM_RooFit_BinnedTestMinos)->Range(8, 128)->UseRealTime();
 
 BENCHMARK_MAIN();
