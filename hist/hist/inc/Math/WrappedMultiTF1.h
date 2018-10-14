@@ -280,7 +280,12 @@ namespace ROOT {
             fFunc->SetParameters(par);
             // no need to call InitArgs (it is called in TF1::GradientPar)
             double prec = this->GetDerivPrecision();
-            fFunc->GradientPar(x, grad, prec);
+            if (TFormula* f = fFunc->GetFormula()) {
+               //TFormula::GradientStorage result(f->GetNpar());
+               f->GradientPar(x, grad);
+               //std::copy(result.begin(), result.end(), grad);
+            }
+            else fFunc->GradientPar(x, grad, prec);
          } else { // case of linear functions
             unsigned int np = NPar();
             for (unsigned int i = 0; i < np; ++i)

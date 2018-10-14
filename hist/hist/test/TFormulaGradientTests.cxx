@@ -287,3 +287,137 @@ TEST(TFormulaGradientPar, GetGradFormula)
    ASSERT_THAT(s, testing::ContainsRegex("void TFormula____id[0-9]*_grad"));
 }
 
+// TEST(TFormulaGradientPar, BiGausCrossCheck)
+// {
+//    auto h = new TF1("f1", "bigaus");
+//    // auto h = new TF1("f1", "landau"); -- inheritently does not work. See DIFLAN
+//    //crystalball, cheb3, bigaus,
+//    //auto h = new TF1("f1", "");
+//    double p[] = {1, 2, 3, 4, 5};
+//    h->SetParameters(p);
+//    double x[] = {0, 1};
+//    TFormula::GradientStorage result_clad(5);
+//    h->GetFormula()->GradientPar(x, result_clad);
+
+//    TFormula::GradientStorage result_num(5);
+//    h->GradientPar(x, result_num.data());
+
+//    ASSERT_FLOAT_EQ(result_num[0], result_clad[0]);
+//    ASSERT_FLOAT_EQ(result_num[1], result_clad[1]);
+//    ASSERT_FLOAT_EQ(result_num[2], result_clad[2]);
+//    ASSERT_FLOAT_EQ(result_num[3], result_clad[3]);
+//    ASSERT_FLOAT_EQ(result_num[4], result_clad[4]);
+// }
+
+// // PERFORMANCE:
+// // Compare the numerical vs AD performance of GradientPar
+// TEST(TFormulaGradientPar, GausTFormulaPerf)
+// {
+//    auto h = new TF1("f1", "gaus");
+//    double p[] = {3, 1, 2};
+//    h->SetParameters(p);
+//    double x[] = {0};
+//    TFormula::GradientStorage result_clad(3);
+
+//    // Clad
+//    TFormula *f = h->GetFormula();
+//    // Note calling GenerateGradientPar is super expensive.
+//    f->GenerateGradientPar();
+//    auto start = std::chrono::system_clock::now();
+//    for (unsigned i = 0; i<10000; ++i)
+//       f->GradientPar(x, result_clad.data());
+//    auto end = std::chrono::system_clock::now();
+//    auto elapsed = end - start;
+
+//    std::cout << "Clad:" << elapsed.count() << '\n';
+
+//    // Numerical
+//    TFormula::GradientStorage result_num(3);
+//    auto start2 = std::chrono::system_clock::now();
+//    for (unsigned i = 0; i<10000; ++i)
+//       h->GradientPar(x, result_num.data());
+//    auto end2 = std::chrono::system_clock::now();
+//    auto elapsed2 = end2 - start2;
+//    std::cout << "Num:" << elapsed2.count() << '\n';
+
+//    // For i = 10000, we get: Clad ~622 vs Num ~6431
+//    // However, if we include the f->GenerateGradientPar() in the counting we
+//    // get: Clad ~69275 vs Num ~7714
+// }
+
+TEST(TFormulaGradientPar, GausPerf)
+{
+   auto f1 = new TF1("f1", "gaus");
+   auto h1 = new TH1D("h1", "h1", 100000, -5, 5);
+   double p1[] = {1, 0, 1.5};
+   f1->SetParameters(p1);
+   h1->FillRandom("f1", 100000);
+
+   double p2[] = {100, 1, 3};
+
+   f1->SetParameters(p2);
+
+
+   auto start = std::chrono::system_clock::now();
+   auto r1 = h1->Fit(f1, "S"); // numerical
+   auto end = std::chrono::system_clock::now();
+   auto elapsed = end - start;
+   std::cout << "Num:" << elapsed.count() << '\n';
+
+   f1->SetParameters(p2);
+
+   auto start0 = std::chrono::system_clock::now();
+   f1->GetFormula()->GenerateGradientPar(); // makes it om par
+   auto end0 = std::chrono::system_clock::now();
+   std::chrono::duration<double> elapsed0 = end0 - start0;
+   std::cout << "Clad Gen:" << elapsed0.count() << 's\n';
+
+   auto start1 = std::chrono::system_clock::now();
+   auto r2 = h1->Fit(f1, "S G"); // clad
+   auto end1 = std::chrono::system_clock::now();
+   auto elapsed1 = end1 - start1;
+   std::cout << "Clad:" << elapsed1.count() << '\n';
+
+   ASSERT_FLOAT_EQ(r1->MinFcnValue(), r2->MinFcnValue());
+}
+
+// TEST(TFormulaGradientPar, GausPerfNum)
+// {
+//    auto f1 = new TF1("f1", "gaus");
+//    auto h1 = new TH1D("h1", "h1", 1000000, -5, 5);
+//    double p1[] = {1, 0, 1.5};
+//    f1->SetParameters(p1);
+//    h1->FillRandom("f1", 1000000);
+
+//    double p2[] = {100, 1, 3};
+
+//    f1->SetParameters(p2);
+//    ROOT::Math::MinimizerOptions::SetDefaultStrategy(0);
+//    auto start = std::chrono::system_clock::now();
+//    auto r1 = h1->Fit(f1, "S"); // numerical
+//    auto end = std::chrono::system_clock::now();
+//    auto elapsed = end - start;
+//    std::cout << "Num:" << elapsed.count() << '\n';
+// }
+
+// TEST(TFormulaGradientPar, GausPerfClad)
+// {
+//    auto f2 = new TF1("f2", "gaus");
+//    auto h2 = new TH1D("h2", "h2", 1000000, -5, 5);
+//    double p1[] = {1, 0, 1.5};
+//    f2->SetParameters(p1);
+//    h2->FillRandom("f2", 1000000);
+
+//    double p2[] = {100, 1, 3};
+
+//    f2->SetParameters(p2);
+//    ROOT::Math::MinimizerOptions::SetDefaultStrategy(0);
+//    auto start = std::chrono::system_clock::now();
+//    // FIXME: Does not call our code.
+//    auto r2 = h2->Fit(f2, "S G"); // clad
+//    auto end = std::chrono::system_clock::now();
+//    auto elapsed = end - start;
+//    std::cout << "Clad" << elapsed.count() << '\n';
+// }
+
+// // For GausPerf Clad vs Num: ~7790376 vs ~2304988
