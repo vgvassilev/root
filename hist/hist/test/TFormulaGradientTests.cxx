@@ -178,6 +178,28 @@ TEST(TFormulaGradientPar, ResultDownsize)
    ASSERT_TRUE(2 == result.size());
 }
 
+TEST(TFormulaGradientPar, Persistency)
+{
+   TFormula f("f", "std::sin([0])");
+   auto file = TFile::Open("tmp.root", "RECREATE");
+   f.Write();
+   file->Close();
+
+   file = TFile::Open("tmp.root");
+   TFormula *formula = static_cast<TFormula*>(file->Get("f"));
+
+   double p[] = {60};
+   f.SetParameters(p);
+   TFormula::GradientStorage result(2);
+   double x[] = {1};
+
+   ASSERT_TRUE(2 == result.size());
+
+   ROOT_EXPECT_NODIAG(f.GradientPar(x, result));
+   ASSERT_FLOAT_EQ(std::cos(60), result[0]);
+   ASSERT_TRUE(2 == result.size());
+}
+
 TEST(TFormulaGradientPar, GausCrossCheck)
 {
    auto h = new TF1("f1", "gaus");
