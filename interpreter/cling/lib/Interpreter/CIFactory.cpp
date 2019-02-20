@@ -552,9 +552,8 @@ namespace {
       //   typedef __PTRDIFF_TYPE__ ptrdiff_t;
       //   <similar follow up errors>
       // For now it is fixed by just checking those two paths are not identical.
-      if (normalizePath(ModulePath) != normalizePath(Opts.ModuleCachePath)) {
+      //if (normalizePath(ModulePath) != normalizePath(Opts.ModuleCachePath))
         Opts.AddPrebuiltModulePath(ModulePath);
-      }
     }
   }
 

@@ -29,6 +29,8 @@
 #include "clang/Parse/Parser.h"
 #include "clang/Sema/Lookup.h"
 #include "clang/Sema/Scope.h"
+#include "clang/Serialization/ASTReader.h"
+#include "clang/Serialization/GlobalModuleIndex.h"
 
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
@@ -279,11 +281,36 @@ bool TClingCallbacks::LookupObject(LookupResult &R, Scope *S) {
    return tryResolveAtRuntimeInternal(R, S);
 }
 
+static bool findInGlobalIndex(cling::Interpreter& Interp, DeclarationName Name) {
+  GlobalModuleIndex* Index
+    = Interp.getCI()->getModuleManager()->getGlobalIndex();
+  if (!Index)
+    return false;
+
+  //assert(Index);
+  // if (Name.getAsString() == "TLorentzVector")
+  //   printf("I am here\n");
+  GlobalModuleIndex::FileNameHitSet FoundModules;
+
+  // Find the modules that reference the identifier.
+  // Note that this only finds top-level modules.
+  if (Index->lookupIdentifier(Name.getAsString(), FoundModules)) {
+    for (auto FileName : FoundModules) {
+      StringRef ModuleName = llvm::sys::path::stem(*FileName);
+      Interp.loadModule(ModuleName);
+    }
+    return true;
+  }
+
+  return false;
+}
+
 bool TClingCallbacks::LookupObject(const DeclContext* DC, DeclarationName Name) {
    if (!IsAutoloadingEnabled() || fIsAutoloadingRecursively) return false;
 
-   if (Name.getNameKind() != DeclarationName::Identifier) return false;
+   return findInGlobalIndex(*m_Interpreter, Name);
 
+   if (Name.getNameKind() != DeclarationName::Identifier) return false;
 
 
    // Get the 'lookup' decl context.
