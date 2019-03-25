@@ -1225,7 +1225,7 @@ static GlobalModuleIndex *loadGlobalModuleIndex(cling::Interpreter& interp, Sour
    auto ModuleManager = CI.getModuleManager();
    assert(ModuleManager);
    //StringRef ModuleIndexPath = HSI.getModuleCachePath();
-   HeaderSearch& HSI = PP.getHeaderSearchInfo();
+   //HeaderSearch& HSI = PP.getHeaderSearchInfo();
    //HSI.setModuleCachePath(TROOT::GetLibDir().Data());
    std::string ModuleIndexPath = TROOT::GetLibDir().Data();
    if (ModuleIndexPath.empty())

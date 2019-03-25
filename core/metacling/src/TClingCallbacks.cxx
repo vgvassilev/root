@@ -281,7 +281,8 @@ bool TClingCallbacks::LookupObject(LookupResult &R, Scope *S) {
    return tryResolveAtRuntimeInternal(R, S);
 }
 
-static bool findInGlobalIndex(cling::Interpreter& Interp, DeclarationName Name) {
+static bool findInGlobalIndex(cling::Interpreter& Interp, DeclarationName Name,
+                              bool loadFirstMatchOnly = true) {
   GlobalModuleIndex* Index
     = Interp.getCI()->getModuleManager()->getGlobalIndex();
   if (!Index)
@@ -298,6 +299,8 @@ static bool findInGlobalIndex(cling::Interpreter& Interp, DeclarationName Name) 
     for (auto FileName : FoundModules) {
       StringRef ModuleName = llvm::sys::path::stem(*FileName);
       Interp.loadModule(ModuleName);
+      if (loadFirstMatchOnly)
+	break;
     }
     return true;
   }
@@ -308,7 +311,9 @@ static bool findInGlobalIndex(cling::Interpreter& Interp, DeclarationName Name) 
 bool TClingCallbacks::LookupObject(const DeclContext* DC, DeclarationName Name) {
    if (!IsAutoloadingEnabled() || fIsAutoloadingRecursively) return false;
 
-   return findInGlobalIndex(*m_Interpreter, Name);
+   // FIXME: We should load only the first available and rely on other callbacks
+   // such as RequireCompleteType and LookupUnqualified to load all.
+   return findInGlobalIndex(*m_Interpreter, Name, /*loadFirstMatchOnly*/false);
 
    if (Name.getNameKind() != DeclarationName::Identifier) return false;
 
