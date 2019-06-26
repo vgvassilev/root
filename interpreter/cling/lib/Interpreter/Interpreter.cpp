@@ -843,8 +843,6 @@ namespace cling {
     IdentifierInfo *II = PP.getIdentifierInfo(M->Name);
     SourceLocation ValidLoc = M->DefinitionLoc;
     Interpreter::PushTransactionRAII RAII(this);
-    // getCI()->getSema().BuildModuleInclude(ValidLoc, M);
-    // PP.makeModuleVisible(M, ValidLoc);
     bool success = !getCI()->getSema().ActOnModuleImport(ValidLoc, ValidLoc,
                                       std::make_pair(II, ValidLoc)).isInvalid();
     if (success) {

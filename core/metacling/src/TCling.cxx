@@ -1224,9 +1224,6 @@ static GlobalModuleIndex *loadGlobalModuleIndex(cling::Interpreter& interp, Sour
    Preprocessor& PP = CI.getPreprocessor();
    auto ModuleManager = CI.getModuleManager();
    assert(ModuleManager);
-   //StringRef ModuleIndexPath = HSI.getModuleCachePath();
-   //HeaderSearch& HSI = PP.getHeaderSearchInfo();
-   //HSI.setModuleCachePath(TROOT::GetLibDir().Data());
    std::string ModuleIndexPath = TROOT::GetLibDir().Data();
    if (ModuleIndexPath.empty())
       return nullptr;
@@ -1235,26 +1232,12 @@ static GlobalModuleIndex *loadGlobalModuleIndex(cling::Interpreter& interp, Sour
    ModuleManager->resetForReload();
    ModuleManager->loadGlobalIndex();
    GlobalModuleIndex *GlobalIndex = ModuleManager->getGlobalIndex();
-   //printf("1\n");
-   // If the global index doesn't exist, create it.
    if (!GlobalIndex && CI.hasFileManager()) {
-      // printf("2\n");
-      // llvm::sys::fs::create_directories(ModuleIndexPath);
-      // GlobalModuleIndex::writeIndex(CI.getFileManager(), CI.getPCHContainerReader(),
-      //                               ModuleIndexPath);
-      // printf("%s\n", ModuleIndexPath.c_str());
-
-      // ModuleManager->resetForReload();
-      // ModuleManager->loadGlobalIndex();
-      // GlobalIndex = ModuleManager->getGlobalIndex();
-      //GlobalIndex->printStats();
-      //GlobalIndex->dump();
    }
    // For finding modules needing to be imported for fixit messages,
    // we need to make the global index cover all modules, so we do that here.
    
    if (!GlobalIndex && !HaveFullGlobalModuleIndex) {
-     //printf("3\n");
       ModuleMap &MMap = PP.getHeaderSearchInfo().getModuleMap();
       bool RecreateIndex = false;
       for (ModuleMap::module_iterator I = MMap.module_begin(),
@@ -1262,21 +1245,10 @@ static GlobalModuleIndex *loadGlobalModuleIndex(cling::Interpreter& interp, Sour
          Module *TheModule = I->second;
          // We do want the index only of the prebuilt modules
          std::string ModuleName = GetModuleNameAsString(TheModule, PP);
-         Warning("loadGlobalModuleIndex", "Loading file %s for %s",
-                 TheModule->Name.c_str(), ModuleName.c_str());
          if (ModuleName.empty())
             continue;
          LoadModule(ModuleName, interp);
          RecreateIndex = true;
-         // const FileEntry *Entry = TheModule->getASTFile();
-         // if (!Entry) {
-         //    SmallVector<std::pair<IdentifierInfo *, SourceLocation>, 2> Path;
-         //    Path.push_back(std::make_pair(PP.getIdentifierInfo(TheModule->Name), TriggerLoc));
-         //    std::reverse(Path.begin(), Path.end());
-         //    // Load a module as hidden.  This also adds it to the global index.
-         //    CI.loadModule(TheModule->DefinitionLoc, Path, Module::Hidden, false);
-         //    RecreateIndex = true;
-         // }
       }
       if (RecreateIndex) {
          GlobalModuleIndex::writeIndex(CI.getFileManager(), CI.getPCHContainerReader(),
@@ -1479,7 +1451,6 @@ TCling::TCling(const char *name, const char *title, const char* const argv[])
       fInterpreter->declare("#ifdef ERROR\n #undef ERROR\n #endif\n");
    }
 
-   //RegisterCxxModules(*fInterpreter);
    RegisterPreIncludedHeaders(*fInterpreter);
 
    // We are now ready (enough is loaded) to init the list of opaque typedefs.

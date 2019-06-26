@@ -288,9 +288,6 @@ static bool findInGlobalIndex(cling::Interpreter& Interp, DeclarationName Name,
   if (!Index)
     return false;
 
-  //assert(Index);
-  // if (Name.getAsString() == "TLorentzVector")
-  //   printf("I am here\n");
   GlobalModuleIndex::FileNameHitSet FoundModules;
 
   // Find the modules that reference the identifier.
