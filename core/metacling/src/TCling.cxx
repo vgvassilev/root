@@ -1093,7 +1093,7 @@ static std::string GetModuleNameAsString(clang::Module *M, const clang::Preproce
    return std::string(llvm::sys::path::stem(ModuleName));
 }
 
-static void RegisterCxxModules(cling::Interpreter &clingInterp)
+static void RegisterCommonCxxModules(cling::Interpreter &clingInterp)
 {
    if (!clingInterp.getCI()->getLangOpts().Modules)
       return;
@@ -1111,35 +1111,21 @@ static void RegisterCxxModules(cling::Interpreter &clingInterp)
    std::vector<std::string> CoreModules = {"ROOT_Foundation_C", "ROOT_Config",
                                            "ROOT_Foundation_Stage1_NoRTTI", "Core", "RIO"};
 
-   // FIXME: Reducing those will let us be less dependent on rootmap files
-   static constexpr std::array<const char *, 3> ExcludeModules = {
-      {"Rtools", "RSQLite", "RInterface"}};
-
    LoadModules(CoreModules, clingInterp);
+
+   // FIXME: Reducing those will let us be less dependent on rootmap files
+   // static constexpr std::array<const char *, 3> ExcludeModules = {
+   //    {"Rtools", "RSQLite", "RInterface"}};
+
 
    // Take this branch only from ROOT because we don't need to preload modules in rootcling
    if (!IsFromRootCling()) {
-      // Dynamically get all the modules and load them if they are not in core modules
-      clang::CompilerInstance &CI = *clingInterp.getCI();
-      clang::ModuleMap &moduleMap = CI.getPreprocessor().getHeaderSearchInfo().getModuleMap();
-      clang::Preprocessor &PP = CI.getPreprocessor();
-      std::vector<std::string> ModulesPreloaded;
-      for (auto I = moduleMap.module_begin(), E = moduleMap.module_end(); I != E; ++I) {
-         clang::Module *M = I->second;
-         assert(M);
+      std::vector<std::string> CommonModules = {"MathCore"};
+      LoadModules(CommonModules, clingInterp);
 
-         std::string ModuleName = GetModuleNameAsString(M, PP);
-         if (!ModuleName.empty() &&
-             std::find(CoreModules.begin(), CoreModules.end(), ModuleName) == CoreModules.end() &&
-             std::find(ExcludeModules.begin(), ExcludeModules.end(), ModuleName) ==
-                ExcludeModules.end()) {
-            if (M->IsSystem && !M->IsMissingRequirement)
-               LoadModule(ModuleName, clingInterp);
-            else if (!M->IsSystem && !M->IsMissingRequirement)
-               ModulesPreloaded.push_back(ModuleName);
-         }
-      }
-      LoadModules(ModulesPreloaded, clingInterp);
+      // These modules should not be preloaded but they fix issues.
+      std::vector<std::string> FIXMEModules = {"Gpad"};
+      LoadModules(FIXMEModules, clingInterp);
    }
 
    // Check that the gROOT macro was exported by any core module.
@@ -1423,7 +1409,7 @@ TCling::TCling(const char *name, const char *title, const char* const argv[])
       fInterpreter->declare("#ifdef ERROR\n #undef ERROR\n #endif\n");
    }
 
-   //RegisterCxxModules(*fInterpreter);
+   RegisterCommonCxxModules(*fInterpreter);
    RegisterPreIncludedHeaders(*fInterpreter);
 
    // We are now ready (enough is loaded) to init the list of opaque typedefs.
