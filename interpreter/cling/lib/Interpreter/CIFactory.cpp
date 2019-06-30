@@ -516,45 +516,6 @@ namespace {
     return &Cmd->getArguments();
   }
 
-  /// \brief Splits the given environment variable by the path separator.
-  /// Can be used to extract the paths from LD_LIBRARY_PATH.
-  static SmallVector<StringRef, 4> getPathsFromEnv(const char* EnvVar) {
-    if (!EnvVar) return {};
-    SmallVector<StringRef, 4> Paths;
-    StringRef(EnvVar).split(Paths, ':', -1, false);
-    return Paths;
-  }
-
-  /// \brief Prepares a file path for string comparison with another file path.
-  /// This easily be tricked by a malicious user with hardlinking directories
-  /// and so on, but for a comparison in good faith this should be enough.
-  static std::string normalizePath(StringRef path) {
-    SmallVector<char, 256> AbsolutePath, Result;
-    AbsolutePath.insert(AbsolutePath.begin(), path.begin(), path.end());
-    llvm::sys::fs::make_absolute(AbsolutePath);
-    llvm::sys::fs::real_path(AbsolutePath, Result, true);
-    return llvm::Twine(Result).str();
-  }
-
-  /// \brief Adds all the paths to the prebuilt module paths of the given
-  /// HeaderSearchOptions.
-  static void addPrebuiltModulePaths(clang::HeaderSearchOptions& Opts,
-                                     const SmallVectorImpl<StringRef>& Paths) {
-    for (StringRef ModulePath : Paths) {
-      // FIXME: If we have a prebuilt module path that is equal to our module
-      // cache we fail to compile the clang builtin modules for some reason.
-      // This makes clang to think it failed to build a dependency module, i.e.
-      // if we are building module C, clang goes off and builds B and A first.
-      // If the module cache points to the same location as the prebuilt module
-      // path, clang errors out on building module A, however, it builds it.
-      // Next time we run, it will build module B and issue diagnostics.
-      // If we run third time, it'd build successfully C and continue.
-      // For now it is fixed by just checking those two paths are not identical.
-      if (normalizePath(ModulePath) != normalizePath(Opts.ModuleCachePath))
-        Opts.AddPrebuiltModulePath(ModulePath);
-    }
-  }
-
 #if defined(_MSC_VER) || defined(NDEBUG)
 static void stringifyPreprocSetting(PreprocessorOptions& PPOpts,
                                     const std::string &Name, int Val) {
@@ -1055,10 +1016,22 @@ static void stringifyPreprocSetting(PreprocessorOptions& PPOpts,
     // This mostly helps ROOT where we can't just recompile any out of date
     // modules because we would miss the annotations that rootcling creates.
     if (COpts.CxxModules) {
-      auto& HS = CI->getHeaderSearchOpts();
-      addPrebuiltModulePaths(HS, getPathsFromEnv(getenv("LD_LIBRARY_PATH")));
-      addPrebuiltModulePaths(HS, getPathsFromEnv(getenv("DYLD_LIBRARY_PATH")));
-    }
+      using EnvPaths = llvm::SmallVector<llvm::StringRef, 4>;
+      auto getPathsFromEnv = [](llvm::StringRef EnvVar) {
+        EnvPaths Paths;
+        EnvVar.split(Paths, ':', -1, false);
+        return Paths;
+      };
+
+      auto &HS = CI->getHeaderSearchOpts();
+      auto addPrebuiltModulePaths = [&HS](const EnvPaths& Paths) {
+        for (StringRef ModulePath : Paths)
+          HS.AddPrebuiltModulePath(ModulePath);
+      };
+      addPrebuiltModulePaths(getPathsFromEnv(getenv("LD_LIBRARY_PATH")));
+      addPrebuiltModulePaths(getPathsFromEnv(getenv("DYLD_LIBRARY_PATH")));
+   }
+
 
     // Set up compiler language and target
     if (!SetupCompiler(CI.get(), COpts, InitLang, InitTarget))
