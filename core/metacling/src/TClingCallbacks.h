@@ -37,15 +37,15 @@ namespace llvm {
 //
 class TClingCallbacks : public cling::InterpreterCallbacks {
 private:
-   void *fLastLookupCtx;
-   clang::NamespaceDecl *fROOTSpecialNamespace;
-   bool fFirstRun;
-   bool fIsAutoloading;
-   bool fIsAutoloadingRecursively;
-   bool fIsAutoParsingSuspended;
-   bool fPPOldFlag;
-   bool fPPChanged;
-   bool fIsCodeGening;
+   void *fLastLookupCtx = nullptr;
+   clang::NamespaceDecl *fROOTSpecialNamespace = nullptr;
+   bool fFirstRun = true;
+   bool fIsAutoloading = false;
+   bool fIsAutoloadingRecursively = false;
+   bool fIsAutoParsingSuspended = false;
+   bool fPPOldFlag = false;
+   bool fPPChanged = false;
+   bool fIsCodeGening = false;
 public:
    TClingCallbacks(cling::Interpreter* interp, bool hasCodeGen);
 
