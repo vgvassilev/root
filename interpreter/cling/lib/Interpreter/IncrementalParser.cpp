@@ -662,6 +662,9 @@ namespace cling {
     // This llvm::Module is done; finalize it and pass it to the execution
     // engine.
     if (!T->isNestedTransaction() && hasCodeGenerator()) {
+      if (InterpreterCallbacks* callbacks = m_Interpreter->getCallbacks())
+        callbacks->TransactionCodeGenStarted(*T);
+
       // The initializers are emitted to the symbol "_GLOBAL__sub_I_" + filename.
       // Make that unique!
       deserT = beginTransaction(CompilationOptions());
@@ -682,6 +685,9 @@ namespace cling {
         Diags.Reset(/*soft=*/true);
         Diags.getClient()->clear();
       }
+
+      if (InterpreterCallbacks* callbacks = m_Interpreter->getCallbacks())
+        callbacks->TransactionCodeGenFinished(*T);
 
       // Create a new module.
       StartModule();
