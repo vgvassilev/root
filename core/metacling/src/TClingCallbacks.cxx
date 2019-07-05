@@ -284,13 +284,27 @@ bool TClingCallbacks::LookupObject(LookupResult &R, Scope *S) {
    return tryResolveAtRuntimeInternal(R, S);
 }
 
-static bool findInGlobalIndex(cling::Interpreter& Interp, DeclarationName Name,
-                              bool loadFirstMatchOnly = true) {
-   GlobalModuleIndex* Index
-      = Interp.getCI()->getModuleManager()->getGlobalIndex();
+bool TClingCallbacks::findInGlobalModuleIndex(DeclarationName Name,
+                                       bool loadFirstMatchOnly/*=true*/) const {
+   const CompilerInstance* CI = m_Interpreter->getCI();
+   const LangOptions& LangOpts = CI->getPreprocessor().getLangOpts();
+
+   if (!LangOpts.Modules)
+      return false;
+
+   // We are currently building a module, we should not import .
+   if (LangOpts.isCompilingModule())
+      return false;
+
+   if (fIsCodeGening)
+      return false;
+
+   GlobalModuleIndex* Index = CI->getModuleManager()->getGlobalIndex();
    if (!Index)
       return false;
 
+   // FIXME: We should load only the first available and rely on other callbacks
+   // such as RequireCompleteType and LookupUnqualified to load all.
    GlobalModuleIndex::FileNameHitSet FoundModules;
 
    // Find the modules that reference the identifier.
@@ -298,7 +312,7 @@ static bool findInGlobalIndex(cling::Interpreter& Interp, DeclarationName Name,
    if (Index->lookupIdentifier(Name.getAsString(), FoundModules)) {
       for (auto FileName : FoundModules) {
          StringRef ModuleName = llvm::sys::path::stem(*FileName);
-         Interp.loadModule(ModuleName);
+         m_Interpreter->loadModule(ModuleName);
          if (loadFirstMatchOnly)
             break;
       }
@@ -315,20 +329,8 @@ bool TClingCallbacks::LookupObject(const DeclContext* DC, DeclarationName Name) 
 
    if (!IsAutoloadingEnabled() || fIsAutoloadingRecursively) return false;
 
-   // We are currently building a module, we should not autoload.
-   Sema &SemaR = m_Interpreter->getSema();
-   const LangOptions& LangOpts = SemaR.getPreprocessor().getLangOpts();
-   if (LangOpts.Modules) {
-      if (LangOpts.isCompilingModule())
-         return false;
-      if (fIsCodeGening)
-         return false;
-
-      // FIXME: We should load only the first available and rely on other callbacks
-      // such as RequireCompleteType and LookupUnqualified to load all.
-      if (findInGlobalIndex(*m_Interpreter, Name, /*loadFirstMatchOnly*/false))
-         return true;
-   }
+   if (findInGlobalModuleIndex(Name, /*loadFirstMatchOnly*/false))
+      return true;
 
    if (Name.getNameKind() != DeclarationName::Identifier) return false;
 
@@ -346,6 +348,7 @@ bool TClingCallbacks::LookupObject(const DeclContext* DC, DeclarationName Name) 
    if (primaryDC != DC)
       return false;
 
+   Sema &SemaR = m_Interpreter->getSema();
    LookupResult R(SemaR, Name, SourceLocation(), Sema::LookupOrdinaryName);
    R.suppressDiagnostics();
    // We need the qualified name for TCling to find the right library.
@@ -379,6 +382,9 @@ bool TClingCallbacks::LookupObject(clang::TagDecl* Tag) {
 
    // Clang needs Tag's complete definition. Can we parse it?
    if (fIsAutoloadingRecursively || fIsAutoParsingSuspended) return false;
+
+   if (findInGlobalModuleIndex(Tag->getDeclName(), /*loadFirstMatchOnly*/false))
+      return true;
 
    Sema &SemaR = m_Interpreter->getSema();
 
