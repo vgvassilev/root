@@ -1125,7 +1125,7 @@ static void RegisterCommonCxxModules(cling::Interpreter &clingInterp)
       LoadModules(CommonModules, clingInterp);
 
       // These modules should not be preloaded but they fix issues.
-      std::vector<std::string> FIXMEModules = {"Hist", "Gpad", "Graf"};
+      std::vector<std::string> FIXMEModules = {"Hist", "Gpad", "Graf", "GenVector", "ROOTDataFrame"};
       LoadModules(FIXMEModules, clingInterp);
    }
 
