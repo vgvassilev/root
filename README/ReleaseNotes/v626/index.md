@@ -27,7 +27,7 @@ The following people have contributed to this new version:
  Pere Mato, CERN/SFT,\
  Lorenzo Moneta, CERN/SFT,\
  Axel Naumann, CERN/SFT,\
- Max Orok, U Ottawa,\
+ Alexander Penev, University of Plovdiv,\
  Danilo Piparo, CERN/SFT,\
  Fons Rademakers, CERN/SFT,\
  Jonas Rembser, CERN/SFT,\
