@@ -12,6 +12,8 @@
 // FIXME: Merge IncrementalExecutor and IncrementalJIT.
 #include "IncrementalExecutor.h"
 
+#include "llvm/ExecutionEngine/Orc/RTDyldObjectLinkingLayer.h"
+#include "llvm/ExecutionEngine/SectionMemoryManager.h"
 #include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
 #include <llvm/ExecutionEngine/Orc/ObjectLinkingLayer.h>
 #include "llvm/IR/LLVMContext.h"
@@ -46,11 +48,29 @@ IncrementalJIT::IncrementalJIT(
   Builder.setExecutorProcessControl(std::move(EPC));
 
   // FIXME: In LLVM 13 this only works for ELF and MachO platforms
-  // Builder.setObjectLinkingLayerCreator(
-  //     [&](ExecutionSession &ES, const Triple &TT) {
-  //       return std::make_unique<ObjectLinkingLayer>(
-  //           ES, std::make_unique<jitlink::InProcessMemoryManager>());
-  //     });
+#if !defined(_WIN32)
+  if (std::getenv("CLING_JITLINK") || std::getenv("CLING_JITLINK_DEBUG")) {
+    Builder.setObjectLinkingLayerCreator([&](ExecutionSession& ES,
+                                             const Triple& TT) {
+      auto GetMemMgr = []() {
+        return std::make_unique<SectionMemoryManager>();
+      };
+      auto ObjLinkingLayer =
+          std::make_unique<RTDyldObjectLinkingLayer>(ES, std::move(GetMemMgr));
+
+      if (std::getenv("CLING_JITLINK_DEBUG")) {
+        // Register the event listener.
+        ObjLinkingLayer->registerJITEventListener(
+            *JITEventListener::createGDBRegistrationListener());
+      }
+
+      // Make sure the debug info sections aren't stripped.
+      ObjLinkingLayer->setProcessAllSections(true);
+
+      return ObjLinkingLayer;
+    });
+  }
+#endif
 
   if (Expected<std::unique_ptr<LLJIT>> JitInstance = Builder.create()) {
     Jit = std::move(*JitInstance);
