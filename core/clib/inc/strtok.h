@@ -3,7 +3,7 @@
 
 #include <ROOT/RConfig.hxx>
 
-#include <cstring>
+#include <string.h>
 
 // On Windows strtok_r does not exist: the function is called strtok_s.
 inline char *R__STRTOK_R(char *str, const char *delim, char **saveptr)

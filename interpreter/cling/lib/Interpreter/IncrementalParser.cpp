@@ -36,13 +36,17 @@
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/FileManager.h"
+#include "clang/CodeGen/CodeGenAction.h"
 #include "clang/CodeGen/ModuleBuilder.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/FrontendDiagnostic.h"
 #include "clang/Frontend/FrontendPluginRegistry.h"
 #include "clang/Frontend/MultiplexConsumer.h"
+#include "clang/FrontendTool/Utils.h"
+#include "clang/Interpreter/Interpreter.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Lex/PreprocessorOptions.h"
+#include "clang/Parse/ParseAST.h"
 #include "clang/Parse/Parser.h"
 #include "clang/Sema/Sema.h"
 #include "clang/Sema/SemaDiagnostic.h"
@@ -286,9 +290,177 @@ static void HandlePlugins(CompilerInstance& CI,
 }
 
 namespace cling {
+
+
+/// A custom action enabling the incremental processing functionality.
+///
+/// The usual \p FrontendAction expects one call to ExecuteAction and once it
+/// sees a call to \p EndSourceFile it deletes some of the important objects
+/// such as \p Preprocessor and \p Sema assuming no further input will come.
+///
+/// \p IncrementalAction ensures it keep its underlying action's objects alive
+/// as long as the \p IncrementalParser needs them.
+///
+class IncrementalAction : public WrapperFrontendAction {
+private:
+  bool IsTerminating = false;
+  bool IsInitialized = false;
+  Interpreter& m_Interpreter;
+  DeclCollector *&m_Consumer;
+  clang::Parser *m_Parser = nullptr;
+public:
+  IncrementalAction(CompilerInstance &CI, llvm::LLVMContext &LLVMCtx,
+                    llvm::Error &Err, Interpreter &Interp,
+                    DeclCollector *& Collector)
+    : WrapperFrontendAction([&]() {
+          llvm::ErrorAsOutParameter EAO(&Err);
+          std::unique_ptr<FrontendAction> Act;
+          switch (CI.getFrontendOpts().ProgramAction) {
+          default:
+            Err = llvm::createStringError(
+                std::errc::state_not_recoverable,
+                "Driver initialization failed. "
+                "Incremental mode for action %d is not supported",
+                CI.getFrontendOpts().ProgramAction);
+            return Act;
+          case frontend::ASTDump:
+            LLVM_FALLTHROUGH;
+          case frontend::ASTPrint:
+            LLVM_FALLTHROUGH;
+          case frontend::GenerateModule:
+            LLVM_FALLTHROUGH;
+          case frontend::ModuleFileInfo:
+            LLVM_FALLTHROUGH;
+          case frontend::ParseSyntaxOnly:
+            Act = CreateFrontendAction(CI);
+            break;
+          case frontend::EmitAssembly:
+            LLVM_FALLTHROUGH;
+          case frontend::EmitObj:
+            LLVM_FALLTHROUGH;
+          case frontend::EmitLLVMOnly:
+            Act.reset(new EmitLLVMOnlyAction(&LLVMCtx));
+            break;
+          }
+          return Act;
+      }()), m_Interpreter(Interp), m_Consumer(Collector) { }
+  ~IncrementalAction() { FinalizeAction(); }
+  clang::Parser *getParser() const { return m_Parser; }
+  FrontendAction *getWrapped() const { return WrappedAction.get(); }
+  TranslationUnitKind getTranslationUnitKind() override {
+    CompilerInstance &CI = getCompilerInstance();
+    // Some actions cannot be incremental but still useful.
+    if (CI.getFrontendOpts().ProgramAction == frontend::ModuleFileInfo)
+      return TU_Complete;
+    return TU_Incremental;
+  }
+  std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI,
+                                                 StringRef InFile) override {
+     auto Consumer = WrapperFrontendAction::CreateASTConsumer(CI, InFile);
+     auto DC = std::make_unique<DeclCollector>();
+     DC->Setup(std::move(Consumer), CI.getPreprocessor());
+     return DC;
+  }
+
+  void Initialize() {
+    assert(!IsInitialized);
+    CompilerInstance &CI = getCompilerInstance();
+
+    // FIXME: Move the truncation aspect of this into Sema, we delayed this till
+    // here so the source manager would be initialized.
+    if (hasCodeCompletionSupport() &&
+        !CI.getFrontendOpts().CodeCompletionAt.FileName.empty())
+      CI.createCodeCompletionConsumer();
+
+    // Use a code completion consumer?
+    CodeCompleteConsumer *CompletionConsumer = nullptr;
+    if (CI.hasCodeCompletionConsumer())
+      CompletionConsumer = &CI.getCodeCompletionConsumer();
+
+    if (!CI.hasSema())
+      CI.createSema(getTranslationUnitKind(), CompletionConsumer);
+
+    Preprocessor &PP = CI.getPreprocessor();
+    // FIXME: Rely on the TU_Incremental instead.
+    PP.enableIncrementalProcessing();
+
+    m_Consumer = static_cast<DeclCollector*>(&CI.getASTConsumer());
+    Interpreter::PushTransactionRAII PushedT(&m_Interpreter);
+    WrapperFrontendAction::ExecuteAction();
+
+    // Steal the ASTFrontendAction's Parser.
+    struct ParserRobber : public ASTFrontendAction {
+      static Parser* getParser(ASTFrontendAction* Act) {
+        return static_cast<ParserRobber*>(Act)->P.get();
+      }
+    };
+    // The action which claims that not only the PP is used is an
+    // ASTFrontendAction, InitOnlyAction or ReadPCHAndPreprocessAction which
+    // we do not support.
+    if (!usesPreprocessorOnly())
+      m_Parser = ParserRobber::getParser(static_cast<ASTFrontendAction*>(getWrapped()));
+
+    IsInitialized = true;
+  }
+
+  void ParseAST() {
+    CompilerInstance &CI = getCompilerInstance();
+    Sema &S = CI.getSema();
+    const FrontendOptions& FEOpts = CI.getFrontendOpts();
+    clang::ParseAST(S, *m_Parser, FEOpts.ShowStats);
+  }
+
+  void ExecuteAction() override {
+    if (!IsInitialized)
+      Initialize();
+  }
+
+  bool BeginSourceFileAction(clang::CompilerInstance &CI) override {
+    if (!IsInitialized)
+      // FIXME: Convert into flags and put in ClangArgv.
+      CIFactory::setupCompiler(&CI, m_Interpreter.getOptions().CompilerOpts);
+    return WrapperFrontendAction::BeginSourceFileAction(CI);
+  }
+
+  bool BeginSourceFile(CompilerInstance &CI,
+                       const FrontendInputFile &RealInput) override {
+    // Will initialize the CI.
+    if (!IsInitialized) {
+      return WrapperFrontendAction::BeginSourceFile(CI, RealInput);
+    }
+    return true;
+  }
+
+  // Do not terminate after processing the input. This allows us to keep various
+  // clang objects alive and to incrementally grow the current TU.
+  void EndSourceFile() override {
+    // The WrappedAction can be nullptr if we issued an error in the ctor.
+    if (IsTerminating && getWrapped())
+      WrapperFrontendAction::EndSourceFile();
+  }
+
+  void FinalizeAction() {
+    assert(!IsTerminating && "Already finalized!");
+    IsTerminating = true;
+    EndSourceFile();
+  }
+};
+
+  llvm::ExitOnError ExitOnErr;
   IncrementalParser::IncrementalParser(Interpreter* interp, const char* llvmdir,
                                    const ModuleFileExtensions& moduleExtensions)
       : m_Interpreter(interp) {
+
+     const auto &COpts = interp->getOptions().CompilerOpts;
+     std::vector<std::string> Args(32);
+     CIFactory::collectInvocationArgs(interp->getOptions().CompilerOpts, Args);
+     std::vector<const char *> ClingArgv(Args.size());
+     std::transform(Args.begin(), Args.end(), ClingArgv.begin(),
+                    [](const std::string &s) -> const char * { return s.data(); });
+
+     m_CI = ExitOnErr(clang::IncrementalCompilerBuilder::create(ClingArgv));
+
+     /*
     std::unique_ptr<cling::DeclCollector> consumer;
     consumer.reset(m_Consumer = new cling::DeclCollector());
     m_CI.reset(CIFactory::createCI("\n", interp->getOptions(), llvmdir,
@@ -330,65 +502,86 @@ namespace cling {
       }
       else
         WrappedConsumer = std::move(CG);
-    }
+      }
+*/
 
-    // Initialize the DeclCollector and add callbacks keeping track of macros.
-    m_Consumer->Setup(this, std::move(WrappedConsumer), m_CI->getPreprocessor());
-
-    m_DiagConsumer.reset(new FilteringDiagConsumer(Diag, false));
-
-    initializeVirtualFile();
   }
 
   bool
   IncrementalParser::Initialize(llvm::SmallVectorImpl<ParseResultTransaction>&
                                 result, bool isChildInterpreter) {
     m_TransactionPool.reset(new TransactionPool);
+    // FIXME: This is an initialization problem. We should remove it.
+    llvm::Error Err = llvm::Error::success();
+    m_Action = std::make_unique<IncrementalAction>(*m_CI, *m_Interpreter->getLLVMContext(), Err, *m_Interpreter, m_Consumer);
+    if (Err) {
+      llvm::logAllUnhandledErrors(std::move(Err), llvm::errs(), "Action creation failed: ");
+      return false;
+    }
+
+
+    m_CI->ExecuteAction(*m_Action);
+
+    // Initialize the DeclCollector and add callbacks keeping track of macros.
+    DiagnosticsEngine& Diag = m_CI->getDiagnostics();
+    m_DiagConsumer.reset(new FilteringDiagConsumer(Diag, false));
+
+    if (m_CI->getPreprocessor().TUKind != TU_Incremental)
+      return true; // This a one-time, non-incremental action.
+
+    initializeVirtualFile();
+
+    // FIXME: How to find the CodeGen when we have a PluginAction...
+    FrontendAction *WrappedAct = m_Action->getWrapped();
+    if (WrappedAct->hasIRSupport())
+      m_CodeGen = static_cast<CodeGenAction *>(WrappedAct)->getCodeGenerator();
+
+
     if (hasCodeGenerator())
       getCodeGenerator()->Initialize(getCI()->getASTContext());
 
-    CompilationOptions CO = m_Interpreter->makeDefaultCompilationOpts();
-    Transaction* CurT = beginTransaction(CO);
     Preprocessor& PP = m_CI->getPreprocessor();
     DiagnosticsEngine& Diags = m_CI->getSema().getDiagnostics();
+    CompilationOptions CO = m_Interpreter->makeDefaultCompilationOpts();
+    Transaction* CurT = beginTransaction(CO);
 
     // Pull in PCH.
-    const std::string& PCHFileName
-      = m_CI->getInvocation().getPreprocessorOpts().ImplicitPCHInclude;
-    if (!PCHFileName.empty()) {
-      Transaction* PchT = beginTransaction(CO);
-      DiagnosticErrorTrap Trap(Diags);
-      m_CI->createPCHExternalASTSource(PCHFileName,
-                                       DisableValidationForModuleKind::All,
-                                       true /*AllowPCHWithCompilerErrors*/,
-                                       nullptr /*DeserializationListener*/,
-                                       true /*OwnsDeserializationListener*/);
-      result.push_back(endTransaction(PchT));
-      if (Trap.hasErrorOccurred()) {
-        result.push_back(endTransaction(CurT));
-        return false;
-      }
-    }
+    // const std::string& PCHFileName
+    //   = m_CI->getInvocation().getPreprocessorOpts().ImplicitPCHInclude;
+    // if (!PCHFileName.empty()) {
+    //   Transaction* PchT = beginTransaction(CO);
+    //   DiagnosticErrorTrap Trap(Diags);
+    //   m_CI->createPCHExternalASTSource(PCHFileName,
+    //                                    DisableValidationForModuleKind::All,
+    //                                    true /*AllowPCHWithCompilerErrors*/,
+    //                                    nullptr /*DeserializationListener*/,
+    //                                    true /*OwnsDeserializationListener*/);
+    //   result.push_back(endTransaction(PchT));
+    //   if (Trap.hasErrorOccurred()) {
+    //     result.push_back(endTransaction(CurT));
+    //     return false;
+    //   }
+    // }
 
     addClingPragmas(*m_Interpreter);
 
     // Must happen after attaching the PCH, else PCH elements will end up
     // being lexed.
-    PP.EnterMainSourceFile();
+    //PP.EnterMainSourceFile();
 
     Sema* TheSema = &m_CI->getSema();
-    m_Parser.reset(new Parser(PP, *TheSema, false /*skipFuncBodies*/));
+    //m_Parser.reset(new Parser(PP, *TheSema, false /*skipFuncBodies*/));
 
-    // Initialize the parser after PP has entered the main source file.
-    m_Parser->Initialize();
+    // // Initialize the parser after PP has entered the main source file.
+    // m_Parser->Initialize();
 
-    ExternalASTSource *External = TheSema->getASTContext().getExternalSource();
-    if (External)
-      External->StartTranslationUnit(m_Consumer);
+    // ExternalASTSource *External = TheSema->getASTContext().getExternalSource();
+    // if (External)
+    //   External->StartTranslationUnit(m_Consumer);
 
-    // Start parsing the "main file" to warm up lexing (enter caching lex mode
-    // for ParseInternal()'s call EnterSourceFile() to make sense.
-    while (!m_Parser->ParseTopLevelDecl()) {}
+    // // Start parsing the "main file" to warm up lexing (enter caching lex mode
+    // // for ParseInternal()'s call EnterSourceFile() to make sense.
+    // while (!m_Parser->ParseTopLevelDecl()) {}
 
     // If I belong to the parent Interpreter, am using C++, and -noruntime
     // wasn't given on command line, then #include <new> and check ABI
@@ -413,7 +606,7 @@ namespace cling {
   bool IncrementalParser::isValid(bool initialized) const {
     return m_CI && m_CI->hasFileManager() && m_Consumer
            && !m_VirtualFileID.isInvalid()
-           && (!initialized || (m_TransactionPool && m_Parser));
+           && (!initialized || (m_TransactionPool && m_Action));
   }
 
   namespace {
@@ -440,6 +633,10 @@ namespace cling {
 
   const Transaction* IncrementalParser::getCurrentTransaction() const {
     return m_Consumer->getTransaction();
+  }
+
+  clang::Parser* IncrementalParser::getParser() const {
+    return m_Action->getParser();
   }
 
   void IncrementalParser::setDiagnosticConsumer(DiagnosticConsumer* Consumer,
@@ -926,16 +1123,18 @@ namespace cling {
     Sema::GlobalEagerInstantiationScope GlobalInstantiations(S, /*Enabled=*/true);
     Sema::LocalEagerInstantiationScope LocalInstantiations(S);
 
-    Parser::DeclGroupPtrTy ADecl;
-    while (!m_Parser->ParseTopLevelDecl(ADecl)) {
-      // If we got a null return and something *was* parsed, ignore it.  This
-      // is due to a top-level semicolon, an action override, or a parse error
-      // skipping something.
-      if (Trap.hasErrorOccurred())
-        m_Consumer->getTransaction()->setIssuedDiags(Transaction::kErrors);
-      if (ADecl)
-        m_Consumer->HandleTopLevelDecl(ADecl.get());
-    };
+    m_Action->ParseAST();
+
+    // Parser::DeclGroupPtrTy ADecl;
+    // while (!m_Parser->ParseTopLevelDecl(ADecl)) {
+    //   // If we got a null return and something *was* parsed, ignore it.  This
+    //   // is due to a top-level semicolon, an action override, or a parse error
+    //   // skipping something.
+    //   if (Trap.hasErrorOccurred())
+    //     m_Consumer->getTransaction()->setIssuedDiags(Transaction::kErrors);
+    //   if (ADecl)
+    //     m_Consumer->HandleTopLevelDecl(ADecl.get());
+    // };
     // If never entered the while block, there's a chance an error occured
     if (Trap.hasErrorOccurred())
       m_Consumer->getTransaction()->setIssuedDiags(Transaction::kErrors);

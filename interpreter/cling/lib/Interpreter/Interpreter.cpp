@@ -156,8 +156,9 @@ namespace cling {
   }
 
   bool Interpreter::isInSyntaxOnlyMode() const {
-    return getCI()->getFrontendOpts().ProgramAction
-      == clang::frontend::ParseSyntaxOnly;
+     return !m_IncrParser->hasCodeGenerator();
+     //return getCI()->getFrontendOpts().ProgramAction
+     // == clang::frontend::ParseSyntaxOnly;
   }
 
   bool Interpreter::isValid() const {
@@ -214,6 +215,16 @@ namespace cling {
 
     m_LLVMContext.reset(new llvm::LLVMContext);
     m_IncrParser.reset(new IncrementalParser(this, llvmdir, moduleExtensions));
+    llvm::SmallVector<IncrementalParser::ParseResultTransaction, 2>
+      IncrParserTransactions;
+    if (!m_IncrParser->Initialize(IncrParserTransactions, parentInterp)) {
+      // Initialization is not going well, but we still have to commit what
+      // we've been given. Don't clear the DiagnosticsConsumer so the caller
+      // can inspect any errors that have been generated.
+      for (auto&& I: IncrParserTransactions)
+        m_IncrParser->commitTransaction(I, false);
+      return;
+    }
     if (!m_IncrParser->isValid(false))
       return;
 
@@ -272,7 +283,7 @@ namespace cling {
     if (usingCxxModules) {
       // Explicitly create the modulemanager now. If we would create it later
       // implicitly then it would just overwrite our callbacks we set below.
-      m_IncrParser->getCI()->createASTReader();
+      //m_IncrParser->getCI()->createASTReader();
 
       // When using C++ modules, we setup the callbacks now that we have them
       // ready before we parse code for the first time. Without C++ modules
@@ -288,17 +299,6 @@ namespace cling {
         llvm::errs() << "Error: libcudart.so not found!\n" <<
           "Please add the cuda lib path to LD_LIBRARY_PATH or set it via -L argument.\n";
        }
-    }
-
-    llvm::SmallVector<IncrementalParser::ParseResultTransaction, 2>
-      IncrParserTransactions;
-    if (!m_IncrParser->Initialize(IncrParserTransactions, parentInterp)) {
-      // Initialization is not going well, but we still have to commit what
-      // we've been given. Don't clear the DiagnosticsConsumer so the caller
-      // can inspect any errors that have been generated.
-      for (auto&& I: IncrParserTransactions)
-        m_IncrParser->commitTransaction(I, false);
-      return;
     }
 
     // When not using C++ modules, we now have a PCH and we can safely setup

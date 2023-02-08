@@ -41,6 +41,7 @@ namespace cling {
   class CompilationOptions;
   class DeclCollector;
   class ExecutionContext;
+  class IncrementalAction;
   class Interpreter;
   class Transaction;
   class TransactionPool;
@@ -62,7 +63,7 @@ namespace cling {
     std::unique_ptr<clang::CompilerInstance> m_CI;
 
     // parser (incremental)
-    std::unique_ptr<clang::Parser> m_Parser;
+    std::unique_ptr<IncrementalAction> m_Action;
 
     // One buffer for each command line, owner by the source file manager
     std::deque<std::pair<llvm::MemoryBuffer*, clang::FileID>> m_MemoryBuffers;
@@ -124,7 +125,7 @@ namespace cling {
     bool Initialize(llvm::SmallVectorImpl<ParseResultTransaction>& result,
                     bool isChildInterpreter);
     clang::CompilerInstance* getCI() const { return m_CI.get(); }
-    clang::Parser* getParser() const { return m_Parser.get(); }
+    clang::Parser* getParser() const;
     clang::CodeGenerator* getCodeGenerator() const { return m_CodeGen; }
     bool hasCodeGenerator() const { return m_CodeGen; }
 

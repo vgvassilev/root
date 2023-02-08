@@ -112,6 +112,21 @@ void clang::ParseAST(Preprocessor &PP, ASTConsumer *Consumer,
 }
 
 void clang::ParseAST(Sema &S, bool PrintStats, bool SkipFunctionBodies) {
+  auto P = std::make_unique<Parser>(S.getPreprocessor(), S, SkipFunctionBodies);
+  S.getPreprocessor().EnterMainSourceFile();
+  ExternalASTSource *External = S.getASTContext().getExternalSource();
+  if (External)
+    External->StartTranslationUnit(&S.getASTConsumer());
+
+  // // If a PCH through header is specified that does not have an include in
+  // // the source, or a PCH is being created with #pragma hdrstop with nothing
+  // // after the pragma, there won't be any tokens or a Lexer.
+  // if (S.getPreprocessor().getCurrentLexer())
+     P->Initialize();
+  ParseAST(S, *P, PrintStats);
+}
+
+void clang::ParseAST(Sema &S, Parser &P, bool PrintStats) {
   // Collect global stats on Decls/Stmts (until we have a module streamer).
   if (PrintStats) {
     Decl::EnableStatistics();
@@ -128,31 +143,20 @@ void clang::ParseAST(Sema &S, bool PrintStats, bool SkipFunctionBodies) {
 
   ASTConsumer *Consumer = &S.getASTConsumer();
 
-  std::unique_ptr<Parser> ParseOP(
-      new Parser(S.getPreprocessor(), S, SkipFunctionBodies));
-  Parser &P = *ParseOP.get();
-
   llvm::CrashRecoveryContextCleanupRegistrar<const void, ResetStackCleanup>
       CleanupPrettyStack(llvm::SavePrettyStackState());
   PrettyStackTraceParserEntry CrashInfo(P);
 
   // Recover resources if we crash before exiting this method.
-  llvm::CrashRecoveryContextCleanupRegistrar<Parser>
-    CleanupParser(ParseOP.get());
-
-  S.getPreprocessor().EnterMainSourceFile();
-  ExternalASTSource *External = S.getASTContext().getExternalSource();
-  if (External)
-    External->StartTranslationUnit(Consumer);
+  llvm::CrashRecoveryContextCleanupRegistrar<Parser> CleanupParser(&P);
 
   // If a PCH through header is specified that does not have an include in
   // the source, or a PCH is being created with #pragma hdrstop with nothing
   // after the pragma, there won't be any tokens or a Lexer.
-  bool HaveLexer = S.getPreprocessor().getCurrentLexer();
+  bool HaveLexer = true/*S.getPreprocessor().getCurrentLexer()*/;
 
   if (HaveLexer) {
     llvm::TimeTraceScope TimeScope("Frontend");
-    P.Initialize();
     Parser::DeclGroupPtrTy ADecl;
     for (bool AtEOF = P.ParseFirstTopLevelDecl(ADecl); !AtEOF;
          AtEOF = P.ParseTopLevelDecl(ADecl)) {

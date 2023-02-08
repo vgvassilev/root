@@ -36,8 +36,11 @@
 #include "clang/AST/ASTContext.h"
 
 #include "clang/Frontend/CompilerInstance.h"
+#include "clang/Frontend/FrontendActions.h"
+#include "clang/Interpreter/Interpreter.h"
 
 #include "clang/Lex/Preprocessor.h"
+#include "clang/Lex/PreprocessorOptions.h"
 #include "clang/Lex/Pragma.h"
 
 #include "cling/Interpreter/CIFactory.h"
@@ -1009,39 +1012,64 @@ bool LinkdefReader::Parse(SelectionRules &sr, llvm::StringRef code, const std::v
 {
    fSelectionRules = &sr;
 
-   std::vector<const char *> parserArgsC;
-   for (size_t i = 0, n = parserArgs.size(); i < n; ++i) {
+   // std::vector<std::string> Args(32);
+   // cling::CIFactory::collectInvocationArgs(fInterp.getOptions().CompilerOpts, Args);
+
+   std::vector<const char *> parserArgsC;//(parserArgs.size());
+   // for (std::string &A : Args)
+   //    parserArgsC.push_back(A.c_str());
+
+   // Skip parserArgs[0] which is the rootcling binary.
+   for (size_t i = 1, n = parserArgs.size(); i < n; ++i)
       parserArgsC.push_back(parserArgs[i].c_str());
-   }
+
+   // std::transform(parserArgs.begin(), parserArgs.end(), parserArgsC.begin(),
+   //                [](const std::string &s) -> const char * { return s.data(); });
+   std::string Std = "-std=c++" +
+        std::to_string(cling::CIFactory::CxxStdCompiledWith());
+   //parserArgsC.push_back("-E");
+   parserArgsC.push_back("-fsyntax-only");
+   parserArgsC.push_back("-U__CINT__");
+   parserArgsC.push_back(Std.c_str());
+
+   // parserArgsC.erase(std::remove(parserArgsC.begin(), parserArgsC.end(), "-fmodules"), parserArgsC.end());
+   // parserArgsC.erase(std::remove(parserArgsC.begin(), parserArgsC.end(), "-fcxx-modules"), parserArgsC.end());
 
    // Extract all #pragmas
+   // std::unique_ptr<llvm::MemoryBuffer> memBuf = llvm::MemoryBuffer::getMemBuffer(code, "CLING #pragma extraction");
+   // clang::CompilerInstance *pragmaCI = cling::CIFactory::createCI(std::move(memBuf), parserArgsC.size(),
+   //                                                                &parserArgsC[0], llvmdir, nullptr /*Consumer*/,
+   //                                                                {} /*ModuleFileExtension*/, true /*OnlyLex*/);
+
+   struct PragmaCollectAction : public clang::SyntaxOnlyAction {
+      LinkdefReader &fLDR;
+      cling::Interpreter &fInterp;
+      PragmaCollectAction(LinkdefReader &ldr, cling::Interpreter &Interp) :
+         fLDR(ldr), fInterp(Interp) {}
+      bool BeginSourceFileAction(clang::CompilerInstance &CI) override {
+         clang::Preprocessor &PP = CI.getPreprocessor();
+         // Attach the handlers before we have started. PP takes the ownership.
+         PP.AddPragmaHandler(new PragmaLinkCollector(fLDR));
+         PP.AddPragmaHandler(new PragmaCreateCollector(fLDR));
+         PP.AddPragmaHandler(new PragmaExtraInclude(fLDR));
+         PP.AddPragmaHandler(new PragmaIoReadInclude(fLDR));
+         //cling::CIFactory::setupCompiler(&CI, fInterp.getOptions().CompilerOpts);
+         return clang::SyntaxOnlyAction::BeginSourceFileAction(CI);
+      }
+
+   } Act(*this, fInterp);
+   auto pragmaCI = llvm::cantFail(clang::IncrementalCompilerBuilder::create(parserArgsC));
    std::unique_ptr<llvm::MemoryBuffer> memBuf = llvm::MemoryBuffer::getMemBuffer(code, "CLING #pragma extraction");
-   clang::CompilerInstance *pragmaCI = cling::CIFactory::createCI(std::move(memBuf), parserArgsC.size(),
-                                                                  &parserArgsC[0], llvmdir, nullptr /*Consumer*/,
-                                                                  {} /*ModuleFileExtension*/, true /*OnlyLex*/);
+   pragmaCI->getPreprocessorOpts().addRemappedFile("<<< inputs >>>", memBuf.release());
+   pragmaCI->ExecuteAction(Act);
 
-   clang::Preprocessor &PP = pragmaCI->getPreprocessor();
-   clang::DiagnosticConsumer &DClient = pragmaCI->getDiagnosticClient();
-   DClient.BeginSourceFile(pragmaCI->getLangOpts(), &PP);
-
-   // FIXME: Reduce the code duplication across these collector classes.
-   PragmaLinkCollector pragmaLinkCollector(*this);
-   PragmaCreateCollector pragmaCreateCollector(*this);
-   PragmaExtraInclude pragmaExtraInclude(*this);
-   PragmaIoReadInclude pragmaIoReadInclude(*this);
-
-   PP.AddPragmaHandler(&pragmaLinkCollector);
-   PP.AddPragmaHandler(&pragmaCreateCollector);
-   PP.AddPragmaHandler(&pragmaExtraInclude);
-   PP.AddPragmaHandler(&pragmaIoReadInclude);
-
-   // Start parsing the specified input file.
-   PP.EnterMainSourceFile();
-   clang::Token tok;
-   do {
-      PP.Lex(tok);
-   } while (tok.isNot(clang::tok::eof));
+   // // Start parsing the specified input file.
+   // PP.EnterMainSourceFile();
+   // clang::Token tok;
+   // do {
+   //    PP.Lex(tok);
+   // } while (tok.isNot(clang::tok::eof));
 
    fSelectionRules = nullptr;
-   return 0 == DClient.getNumErrors();
+   return 0 == pragmaCI->getDiagnosticClient().getNumErrors();
 }

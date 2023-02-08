@@ -20,6 +20,7 @@ set(LIBS
   clangSerialization
   clangAST
   clangBasic
+  clangInterpreter
   clangLex
 )
 

@@ -16,6 +16,7 @@
 #include "clang/Basic/LangOptions.h"
 
 namespace clang {
+  class Parser;
   class Preprocessor;
   class ASTConsumer;
   class ASTContext;
@@ -45,6 +46,10 @@ namespace clang {
   /// abstract syntax tree.
   void ParseAST(Sema &S, bool PrintStats = false,
                 bool SkipFunctionBodies = false);
+
+  /// Parse with already initialized parser infrastructure and produce an
+  /// abstract syntax tree.
+  void ParseAST(Sema &S, Parser &P, bool PrintStats = false);
 
 }  // end namespace clang
 

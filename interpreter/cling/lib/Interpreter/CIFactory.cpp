@@ -108,7 +108,7 @@ namespace {
 
   static void ReadCompilerIncludePaths(const char* Compiler,
                                        llvm::SmallVectorImpl<char>& Buf,
-                                       AdditionalArgList& Args,
+                                       std::vector<std::string>& Args,
                                        bool Verbose) {
     std::string CppInclQuery("LC_ALL=C ");
     CppInclQuery.append(Compiler);
@@ -130,8 +130,10 @@ namespace {
             if (Verbose)
               cling::utils::LogNonExistantDirectory(Path);
           }
-          else
-            Args.addArgument("-cxx-isystem", Path.str());
+          else {
+            Args.push_back("-cxx-isystem");
+            Args.push_back(Path.str());
+          }
         }
       }
       ::pclose(PF);
@@ -149,11 +151,11 @@ namespace {
     } else if (Verbose) {
       cling::log() << "Found:\n";
       for (const auto& Arg : Args)
-        cling::log() << "  " << Arg.second << "\n";
+        cling::log() << "  " << Arg << "\n";
     }
   }
 
-  static bool AddCxxPaths(llvm::StringRef PathStr, AdditionalArgList& Args,
+  static bool AddCxxPaths(llvm::StringRef PathStr, std::vector<std::string>& Args,
                           bool Verbose) {
     if (Verbose)
       cling::log() << "Looking for C++ headers in \"" << PathStr << "\"\n";
@@ -170,7 +172,7 @@ namespace {
     }
 
     for (llvm::StringRef Path : Paths)
-      Args.addArgument("-cxx-isystem", Path.str());
+      Args.push_back("-cxx-isystem=" + Path.str());
 
     return true;
   }
@@ -203,11 +205,11 @@ namespace {
 
   ///\brief Adds standard library -I used by whatever compiler is found in PATH.
   static void AddHostArguments(llvm::StringRef clingBin,
-                               std::vector<const char*>& args,
+                               std::vector<std::string>& args,
                                const char* llvmdir, const CompilerOptions& opts) {
     (void)clingBin;
-    static AdditionalArgList sArguments;
-    if (sArguments.empty()) {
+    //static AdditionalArgList sArguments;
+    //if (sArguments.empty()) {
       const bool Verbose = opts.Verbose;
 #ifdef _MSC_VER
       // When built with access to the proper Windows APIs, try to actually find
@@ -224,20 +226,20 @@ namespace {
           const std::string VSIncl = VSDir + "\\include";
           if (Verbose)
             cling::log() << "Adding VisualStudio SDK: '" << VSIncl << "'\n";
-          sArguments.addArgument("-I", std::move(VSIncl));
+          args.push_back("-I" + VSIncl);
         }
         if (!opts.NoBuiltinInc) {
           if (!WinSDK.empty()) {
             WinSDK.append("\\include");
             if (Verbose)
               cling::log() << "Adding Windows SDK: '" << WinSDK << "'\n";
-            sArguments.addArgument("-I", std::move(WinSDK));
+            args.push_back("-I" + WinSDK);
           } else {
             // Since Visual Studio 2017, this is not valid anymore...
             VSDir.append("\\VC\\PlatformSDK\\Include");
             if (Verbose)
               cling::log() << "Adding Platform SDK: '" << VSDir << "'\n";
-            sArguments.addArgument("-I", std::move(VSDir));
+            args.push_back("-I" + VSDir);
           }
         }
       }
@@ -246,7 +248,7 @@ namespace {
       if (!UnivSDK.empty()) {
         if (Verbose)
           cling::log() << "Adding UniversalCRT SDK: '" << UnivSDK << "'\n";
-        sArguments.addArgument("-I", std::move(UnivSDK));
+        args.push_back("-I" + UnivSDK);
       }
 #endif
 
@@ -254,33 +256,33 @@ namespace {
       // causing a lot of warnings for different redeclarations (eg. coming from
       // the test suite).
       // Do not warn about such cases.
-      sArguments.addArgument("-Wno-dll-attribute-on-redeclaration");
-      sArguments.addArgument("-Wno-inconsistent-dllimport");
+      args.push_back("-Wno-dll-attribute-on-redeclaration");
+      args.push_back("-Wno-inconsistent-dllimport");
 
       // Assume Windows.h might be included, and don't spew a ton of warnings
-      sArguments.addArgument("-Wno-ignored-attributes");
-      sArguments.addArgument("-Wno-nonportable-include-path");
-      sArguments.addArgument("-Wno-microsoft-enum-value");
-      sArguments.addArgument("-Wno-expansion-to-defined");
+      args.push_back("-Wno-ignored-attributes");
+      args.push_back("-Wno-nonportable-include-path");
+      args.push_back("-Wno-microsoft-enum-value");
+      args.push_back("-Wno-expansion-to-defined");
 
       // silent many warnings (mostly during ROOT compilation)
-      sArguments.addArgument("-Wno-constant-conversion");
-      sArguments.addArgument("-Wno-unknown-escape-sequence");
-      sArguments.addArgument("-Wno-microsoft-unqualified-friend");
-      sArguments.addArgument("-Wno-deprecated-declarations");
+      args.push_back("-Wno-constant-conversion");
+      args.push_back("-Wno-unknown-escape-sequence");
+      args.push_back("-Wno-microsoft-unqualified-friend");
+      args.push_back("-Wno-deprecated-declarations");
 
-      //sArguments.addArgument("-fno-threadsafe-statics");
+      //args.push_back("-fno-threadsafe-statics");
 
-      //sArguments.addArgument("-Wno-dllimport-static-field-def");
-      //sArguments.addArgument("-Wno-microsoft-template");
+      //args.push_back("-Wno-dllimport-static-field-def");
+      //args.push_back("-Wno-microsoft-template");
 
 #else // _MSC_VER
 
       // Skip LLVM_CXX execution if -nostdinc++ was provided.
       if (!opts.NoCXXInc) {
-        // Need sArguments.empty as a check condition later
-        assert(sArguments.empty() && "Arguments not empty");
-
+        // Need args.empty as a check condition later
+        std::vector<std::string> compilerArgs;
+        assert(compilerArgs.empty() && "Arguments not empty");
         SmallString<2048> buffer;
 
   #ifdef _LIBCPP_VERSION
@@ -299,27 +301,27 @@ namespace {
             clang.append(" -stdlib=libstdc++");
   #endif
           }
-          ReadCompilerIncludePaths(clang.c_str(), buffer, sArguments, Verbose);
+          ReadCompilerIncludePaths(clang.c_str(), buffer, compilerArgs, Verbose);
         }
   #endif // _LIBCPP_VERSION
 
   // First try the relative path 'g++'
   #ifdef CLING_CXX_RLTV
-        if (sArguments.empty())
-          ReadCompilerIncludePaths(CLING_CXX_RLTV, buffer, sArguments, Verbose);
+        if (compilerArgs.empty())
+          ReadCompilerIncludePaths(CLING_CXX_RLTV, buffer, compilerArgs, Verbose);
   #endif
   // Then try the include directory cling was built with
   #ifdef CLING_CXX_INCL
-        if (sArguments.empty())
-          AddCxxPaths(CLING_CXX_INCL, sArguments, Verbose);
+        if (compilerArgs.empty())
+          AddCxxPaths(CLING_CXX_INCL, compilerArgs, Verbose);
   #endif
   // Finally try the absolute path i.e.: '/usr/bin/g++'
   #ifdef CLING_CXX_PATH
-        if (sArguments.empty())
-          ReadCompilerIncludePaths(CLING_CXX_PATH, buffer, sArguments, Verbose);
+        if (compilerArgs.empty())
+          ReadCompilerIncludePaths(CLING_CXX_PATH, buffer, compilerArgs, Verbose);
   #endif
 
-        if (sArguments.empty()) {
+        if (compilerArgs.empty()) {
           // buffer is a copy of the query string that failed
           cling::errs() << "ERROR in cling::CIFactory::createCI(): cannot extract"
                           " standard library include paths!\n";
@@ -340,12 +342,14 @@ namespace {
                           " are undefined, there was probably an error during"
                           " configuration.\n";
   #endif
-        } else
-          sArguments.addArgument("-nostdinc++");
+        } else {
+          args.insert(args.end(), compilerArgs.begin(), compilerArgs.end());
+          args.push_back("-nostdinc++");
+        }
       }
 
   #ifdef CLING_OSX_SYSROOT
-    sArguments.addArgument("-isysroot", CLING_OSX_SYSROOT);
+    args.push_back("-isysroot" + CLING_OSX_SYSROOT);
   #endif
 
 #endif // _MSC_VER
@@ -361,15 +365,15 @@ namespace {
             << resourcePath << " not found!\n";
           resourcePath = "";
         } else {
-          sArguments.addArgument("-resource-dir", std::move(resourcePath));
+          args.push_back("-resource-dir" + resourcePath);
         }
       }
-    }
+      //}
 
-    for (auto& arg : sArguments) {
-      args.push_back(arg.first);
-      args.push_back(arg.second.c_str());
-    }
+    // for (auto& arg : sArguments) {
+    //   args.push_back(arg.first);
+    //   args.push_back(arg.second.c_str());
+    // }
   }
 
   static void SetClingCustomLangOpts(LangOptions& Opts,
@@ -920,26 +924,23 @@ namespace {
     PreprocessorOptions& PPOpts = CI->getInvocation().getPreprocessorOpts();
     SetPreprocessorFromBinary(PPOpts);
 
-    // Sanity check that clang delivered the language standard requested
-    if (CompilerOpts.DefaultLanguage(&LangOpts)) {
-      switch (CxxStdCompiledWith()) {
-        case 20: assert(LangOpts.CPlusPlus20 && "Language version mismatch");
-          LLVM_FALLTHROUGH;
-        case 17: assert(LangOpts.CPlusPlus17 && "Language version mismatch");
-          LLVM_FALLTHROUGH;
-        case 14: assert(LangOpts.CPlusPlus14 && "Language version mismatch");
-          LLVM_FALLTHROUGH;
-        case 11: assert(LangOpts.CPlusPlus11 && "Language version mismatch");
-          break;
-        default: assert(false && "You have an unhandled C++ standard!");
-      }
-    }
-
-    PPOpts.addMacroDef("__CLING__");
-    if (LangOpts.CPlusPlus11 == 1)
-      PPOpts.addMacroDef("__CLING__CXX11");
-    if (LangOpts.CPlusPlus14 == 1)
-      PPOpts.addMacroDef("__CLING__CXX14");
+    const clang::FrontendOptions& FEOpts = CI->getFrontendOpts();
+    if (!FEOpts.Inputs.size() ||
+        FEOpts.Inputs[0].getKind().getFormat() != clang::InputKind::Precompiled)
+       // Sanity check that clang delivered the language standard requested
+       if (CompilerOpts.DefaultLanguage(&LangOpts)) {
+          switch (CxxStdCompiledWith()) {
+          case 20: assert(LangOpts.CPlusPlus20 && "Language version mismatch");
+             LLVM_FALLTHROUGH;
+          case 17: assert(LangOpts.CPlusPlus17 && "Language version mismatch");
+             LLVM_FALLTHROUGH;
+          case 14: assert(LangOpts.CPlusPlus14 && "Language version mismatch");
+             LLVM_FALLTHROUGH;
+          case 11: assert(LangOpts.CPlusPlus11 && "Language version mismatch");
+             break;
+          default: assert(false && "You have an unhandled C++ standard!");
+          }
+       }
 
     DiagnosticsEngine& Diags = CI->getDiagnostics();
     if (Diags.hasErrorOccurred()) {
@@ -947,14 +948,14 @@ namespace {
       return false;
     }
 
-    CI->setTarget(TargetInfo::CreateTargetInfo(Diags,
-                                               CI->getInvocation().TargetOpts));
-    if (!CI->hasTarget()) {
-      cling::errs() << "Could not determine compiler target.\n";
-      return false;
-    }
+    // CI->setTarget(TargetInfo::CreateTargetInfo(Diags,
+    //                                            CI->getInvocation().TargetOpts));
+    // if (!CI->hasTarget()) {
+    //   cling::errs() << "Could not determine compiler target.\n";
+    //   return false;
+    // }
 
-    CI->getTarget().adjust(Diags, LangOpts);
+    // CI->getTarget().adjust(Diags, LangOpts);
 
     // This may have already been done via a precompiled header
     if (Targ)
@@ -996,228 +997,6 @@ namespace {
     }
   };
 
-  static void HandleProgramActions(CompilerInstance &CI) {
-    const clang::FrontendOptions& FrontendOpts = CI.getFrontendOpts();
-    if (FrontendOpts.ProgramAction == clang::frontend::ModuleFileInfo) {
-      // Copied from FrontendActions.cpp
-      // FIXME: Remove when we switch to the new driver.
-
-      class DumpModuleInfoListener : public ASTReaderListener {
-        llvm::raw_ostream &Out;
-
-      public:
-        DumpModuleInfoListener(llvm::raw_ostream &OS) : Out(OS) { }
-
-#define DUMP_BOOLEAN(Value, Text)                                       \
-        Out.indent(4) << Text << ": " << (Value? "Yes" : "No") << "\n"
-
-        bool ReadFullVersionInformation(StringRef FullVersion) override {
-          Out.indent(2)
-            << "Generated by "
-            << (FullVersion == getClangFullRepositoryVersion()? "this"
-                                                              : "a different")
-            << " Clang: " << FullVersion << "\n";
-          return ASTReaderListener::ReadFullVersionInformation(FullVersion);
-        }
-
-        void ReadModuleName(StringRef ModuleName) override {
-          Out.indent(2) << "Module name: " << ModuleName << "\n";
-        }
-        void ReadModuleMapFile(StringRef ModuleMapPath) override {
-          Out.indent(2) << "Module map file: " << ModuleMapPath << "\n";
-        }
-
-        bool ReadLanguageOptions(const LangOptions &LangOpts, bool /*Complain*/,
-                                 bool /*AllowCompatibleDifferences*/) override {
-          Out.indent(2) << "Language options:\n";
-#define LANGOPT(Name, Bits, Default, Description)                       \
-          DUMP_BOOLEAN(LangOpts.Name, Description);
-#define ENUM_LANGOPT(Name, Type, Bits, Default, Description)            \
-          Out.indent(4) << Description << ": "                          \
-                    << static_cast<unsigned>(LangOpts.get##Name()) << "\n";
-#define VALUE_LANGOPT(Name, Bits, Default, Description) \
-          Out.indent(4) << Description << ": " << LangOpts.Name << "\n";
-#define BENIGN_LANGOPT(Name, Bits, Default, Description)
-#define BENIGN_ENUM_LANGOPT(Name, Type, Bits, Default, Description)
-#include "clang/Basic/LangOptions.def"
-
-          if (!LangOpts.ModuleFeatures.empty()) {
-            Out.indent(4) << "Module features:\n";
-            for (StringRef Feature : LangOpts.ModuleFeatures)
-              Out.indent(6) << Feature << "\n";
-          }
-
-          return false;
-        }
-
-        bool ReadTargetOptions(const TargetOptions &TargetOpts,
-                               bool /*Complain*/,
-                               bool /*AllowCompatibleDifferences*/) override {
-          Out.indent(2) << "Target options:\n";
-          Out.indent(4) << "  Triple: " << TargetOpts.Triple << "\n";
-          Out.indent(4) << "  CPU: " << TargetOpts.CPU << "\n";
-          Out.indent(4) << "  ABI: " << TargetOpts.ABI << "\n";
-
-          if (!TargetOpts.FeaturesAsWritten.empty()) {
-            Out.indent(4) << "Target features:\n";
-            for (unsigned I = 0, N = TargetOpts.FeaturesAsWritten.size();
-                 I != N; ++I) {
-              Out.indent(6) << TargetOpts.FeaturesAsWritten[I] << "\n";
-            }
-          }
-
-          return false;
-        }
-
-        bool ReadDiagnosticOptions(IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts,
-                                   bool /*Complain*/) override {
-          Out.indent(2) << "Diagnostic options:\n";
-#define DIAGOPT(Name, Bits, Default) DUMP_BOOLEAN(DiagOpts->Name, #Name);
-#define ENUM_DIAGOPT(Name, Type, Bits, Default)                         \
-          Out.indent(4) << #Name << ": " << DiagOpts->get##Name() << "\n";
-#define VALUE_DIAGOPT(Name, Bits, Default)                              \
-      Out.indent(4) << #Name << ": " << DiagOpts->Name << "\n";
-#include "clang/Basic/DiagnosticOptions.def"
-
-          Out.indent(4) << "Diagnostic flags:\n";
-          for (const std::string &Warning : DiagOpts->Warnings)
-            Out.indent(6) << "-W" << Warning << "\n";
-          for (const std::string &Remark : DiagOpts->Remarks)
-            Out.indent(6) << "-R" << Remark << "\n";
-
-          return false;
-        }
-
-        bool ReadHeaderSearchOptions(const HeaderSearchOptions &HSOpts,
-                                     StringRef SpecificModuleCachePath,
-                                     bool /*Complain*/) override {
-          Out.indent(2) << "Header search options:\n";
-          Out.indent(4) << "System root [-isysroot=]: '"
-                        << HSOpts.Sysroot << "'\n";
-          Out.indent(4) << "Resource dir [ -resource-dir=]: '"
-                        << HSOpts.ResourceDir << "'\n";
-          Out.indent(4) << "Module Cache: '" << SpecificModuleCachePath
-                        << "'\n";
-          DUMP_BOOLEAN(HSOpts.UseBuiltinIncludes,
-                       "Use builtin include directories [-nobuiltininc]");
-          DUMP_BOOLEAN(HSOpts.UseStandardSystemIncludes,
-                       "Use standard system include directories [-nostdinc]");
-          DUMP_BOOLEAN(HSOpts.UseStandardCXXIncludes,
-                       "Use standard C++ include directories [-nostdinc++]");
-          DUMP_BOOLEAN(HSOpts.UseLibcxx,
-                       "Use libc++ (rather than libstdc++) [-stdlib=]");
-          return false;
-        }
-
-        bool ReadPreprocessorOptions(const PreprocessorOptions &PPOpts,
-                                     bool /*Complain*/,
-                                std::string &/*SuggestedPredefines*/) override {
-          Out.indent(2) << "Preprocessor options:\n";
-          DUMP_BOOLEAN(PPOpts.UsePredefines,
-                       "Uses compiler/target-specific predefines [-undef]");
-          DUMP_BOOLEAN(PPOpts.DetailedRecord,
-                       "Uses detailed preprocessing record (for indexing)");
-
-          if (!PPOpts.Macros.empty()) {
-            Out.indent(4) << "Predefined macros:\n";
-          }
-
-          for (std::vector<std::pair<std::string, bool/*isUndef*/> >::const_iterator
-                 I = PPOpts.Macros.begin(), IEnd = PPOpts.Macros.end();
-               I != IEnd; ++I) {
-            Out.indent(6);
-            if (I->second)
-              Out << "-U";
-            else
-              Out << "-D";
-            Out << I->first << "\n";
-          }
-          return false;
-        }
-
-        /// Indicates that a particular module file extension has been read.
-        void readModuleFileExtension(
-                         const ModuleFileExtensionMetadata &Metadata) override {
-          Out.indent(2) << "Module file extension '"
-                        << Metadata.BlockName << "' " << Metadata.MajorVersion
-                        << "." << Metadata.MinorVersion;
-          if (!Metadata.UserInfo.empty()) {
-            Out << ": ";
-            Out.write_escaped(Metadata.UserInfo);
-          }
-
-          Out << "\n";
-        }
-
-        /// Tells the \c ASTReaderListener that we want to receive the
-        /// input files of the AST file via \c visitInputFile.
-        bool needsInputFileVisitation() override { return true; }
-
-        /// Tells the \c ASTReaderListener that we want to receive the
-        /// input files of the AST file via \c visitInputFile.
-        bool needsSystemInputFileVisitation() override { return true; }
-
-        /// Indicates that the AST file contains particular input file.
-        ///
-        /// \returns true to continue receiving the next input file, false to stop.
-        bool visitInputFile(StringRef Filename, bool isSystem,
-                            bool isOverridden, bool isExplicitModule) override {
-
-          Out.indent(2) << "Input file: " << Filename;
-
-          if (isSystem || isOverridden || isExplicitModule) {
-            Out << " [";
-            if (isSystem) {
-              Out << "System";
-              if (isOverridden || isExplicitModule)
-                Out << ", ";
-            }
-            if (isOverridden) {
-              Out << "Overridden";
-              if (isExplicitModule)
-                Out << ", ";
-            }
-            if (isExplicitModule)
-              Out << "ExplicitModule";
-
-            Out << "]";
-          }
-
-          Out << "\n";
-
-          return true;
-        }
-#undef DUMP_BOOLEAN
-      };
-
-      std::unique_ptr<llvm::raw_fd_ostream> OutFile;
-      StringRef OutputFileName = FrontendOpts.OutputFile;
-      if (!OutputFileName.empty() && OutputFileName != "-") {
-        std::error_code EC;
-        OutFile.reset(new llvm::raw_fd_ostream(OutputFileName.str(), EC,
-                                               llvm::sys::fs::OF_Text));
-      }
-      llvm::raw_ostream &Out = OutFile.get()? *OutFile.get() : llvm::outs();
-      StringRef CurInput = FrontendOpts.Inputs[0].getFile();
-      Out << "Information for module file '" << CurInput << "':\n";
-      auto &FileMgr = CI.getFileManager();
-      auto Buffer = FileMgr.getBufferForFile(CurInput);
-      StringRef Magic = (*Buffer)->getMemBufferRef().getBuffer();
-      bool IsRaw = (Magic.size() >= 4 && Magic[0] == 'C' && Magic[1] == 'P' &&
-                    Magic[2] == 'C' && Magic[3] == 'H');
-      Out << "  Module format: " << (IsRaw ? "raw" : "obj") << "\n";
-      Preprocessor &PP = CI.getPreprocessor();
-      DumpModuleInfoListener Listener(Out);
-      HeaderSearchOptions &HSOpts =
-        PP.getHeaderSearchInfo().getHeaderSearchOpts();
-      ASTReader::readASTFileControlBlock(CurInput, FileMgr,
-                                         CI.getPCHContainerReader(),
-                                         /*FindModuleFileExtensions=*/true,
-                                         Listener,
-                                         HSOpts.ModulesValidateDiagnosticOptions);
-    }
-  }
-
   static CompilerInstance*
   createCIImpl(std::unique_ptr<llvm::MemoryBuffer> Buffer,
                const CompilerOptions& COpts,
@@ -1242,131 +1021,13 @@ namespace {
 
     const size_t argc = COpts.Remaining.size();
     const char* const* argv = &COpts.Remaining[0];
+    // FIXME: Why do we need to insert the binary name here?
     std::vector<const char*> argvCompile(argv, argv+1);
     argvCompile.reserve(argc+32);
-
-    bool debuggingEnabled =
-        cling::utils::ConvertEnvValueToBool(std::getenv("CLING_DEBUG"));
-
-    bool profilingEnabled =
-        cling::utils::ConvertEnvValueToBool(std::getenv("CLING_PROFILE"));
-
-#if __APPLE__ && __arm64__
-    argvCompile.push_back("--target=arm64-apple-darwin20.3.0");
-#endif
-#if __aarch64__
-    // Disable outline-atomics on AArch64; the routines __aarch64_* are defined
-    // in the static library libgcc.a and not necessarily included in libCling
-    // or otherwise present in the process, so the interpreter has a hard time
-    // finding them.
-    argvCompile.push_back("-mno-outline-atomics");
-#endif
-
-    // Variables for storing the memory of the C-string arguments.
-    // FIXME: We shouldn't use C-strings in the first place, but just use
-    // std::string for clang arguments.
-    std::string overlayArg;
-    std::string cacheArg;
-
-    // If user has enabled C++ modules we add some special module flags to the
-    // compiler invocation.
-    if (COpts.CxxModules) {
-      // Enables modules in clang.
-      argvCompile.push_back("-fmodules");
-      argvCompile.push_back("-fcxx-modules");
-      // We want to use modules in local-submodule-visibility mode. This mode
-      // will probably be the future default mode for C++ modules in clang, so
-      // we want to start using right now.
-      // Maybe we have to remove this flag in the future when clang makes this
-      // mode the default and removes this internal flag.
-      argvCompile.push_back("-Xclang");
-      argvCompile.push_back("-fmodules-local-submodule-visibility");
-      // If we got a cache path, then we are supposed to place any modules
-      // we have to build in this directory.
-      if (!COpts.CachePath.empty()) {
-        cacheArg = std::string("-fmodules-cache-path=") + COpts.CachePath;
-        argvCompile.push_back(cacheArg.c_str());
-      }
-      // Disable the module hash. This gives us a flat file layout in the
-      // modules cache directory. In clang this is used to prevent modules from
-      // different compiler invocations to not collide, but we only have one
-      // compiler invocation in cling, so we don't need this.
-      argvCompile.push_back("-Xclang");
-      argvCompile.push_back("-fdisable-module-hash");
-      // Disable the warning when we import a module from extern C. Some headers
-      // from the STL are doing this and we can't really do anything about this.
-      argvCompile.push_back("-Wno-module-import-in-extern-c");
-      // Disable the warning when we import a module in a function body. This
-      // is a ROOT-specific issue tracked by ROOT-9088.
-      // FIXME: Remove after merging ROOT's PR1306.
-      argvCompile.push_back("-Wno-modules-import-nested-redundant");
-      // FIXME: We get an error "'cling/module.modulemap' from the precompiled
-      //  header has been overridden". This comes from a bug that rootcling
-      // introduces by adding a lot of garbage in the PCH/PCM files because it
-      // essentially serializes its current state of the AST. That usually
-      // includes a few memory buffers which override their own contents.
-      // We know how to remove this: just implement a callback in clang
-      // which calls back the interpreter when a module file is built. This is
-      // a lot of work as it needs fixing rootcling. See RE-0003.
-      argvCompile.push_back("-Xclang");
-      argvCompile.push_back("-fno-validate-pch");
-    }
-
-    if (!COpts.Language) {
-      // We do C++ by default; append right after argv[0] if no "-x" given
-      argvCompile.push_back("-x");
-      argvCompile.push_back( "c++");
-    }
-
-    if (COpts.DefaultLanguage()) {
-      // By default, set the standard to what cling was compiled with.
-      // clang::driver::Compilation will do various things while initializing
-      // and by enforcing the std version now cling is telling clang what to
-      // do, rather than after clang has dedcuded a default.
-      switch (CxxStdCompiledWith()) {
-        case 20: argvCompile.emplace_back("-std=c++20"); break;
-        case 17: argvCompile.emplace_back("-std=c++17"); break;
-        case 14: argvCompile.emplace_back("-std=c++14"); break;
-        case 11: argvCompile.emplace_back("-std=c++11"); break;
-        default: llvm_unreachable("Unrecognized C++ version");
-      }
-    }
-
-    // This argument starts the cling instance with the x86 target. Otherwise,
-    // the first job in the joblist starts the cling instance with the nvptx
-    // target.
-    if(COpts.CUDAHost)
-      argvCompile.push_back("--cuda-host-only");
-
-#ifdef __linux__
-    // Keep frame pointer to make JIT stack unwinding reliable for profiling
-    if (profilingEnabled)
-      argvCompile.push_back("-fno-omit-frame-pointer");
-#endif
-
-    // Disable optimizations and keep frame pointer when debugging
-    if (debuggingEnabled)
-      argvCompile.push_back("-O0 -fno-omit-frame-pointer");
-
-    // argv[0] already inserted, get the rest
-    argvCompile.insert(argvCompile.end(), argv+1, argv + argc);
-
-    // Add host specific includes, -resource-dir if necessary, and -isysroot
-    std::string ClingBin = GetExecutablePath(argv[0]);
-    AddHostArguments(ClingBin, argvCompile, LLVMDir, COpts);
-
-    // Be explicit about the stdlib on OS X
-    // Would be nice on Linux but will warn 'argument unused during compilation'
-    // when -nostdinc++ is passed
-#ifdef __APPLE__
-    if (!COpts.StdLib) {
-  #ifdef _LIBCPP_VERSION
-      argvCompile.push_back("-stdlib=libc++");
-  #elif defined(__GLIBCXX__)
-      argvCompile.push_back("-stdlib=libstdc++");
-  #endif
-    }
-#endif
+    std::vector<std::string> Args(32);
+    cling::CIFactory::collectInvocationArgs(COpts, Args);
+    std::transform(Args.begin(), Args.end(), argvCompile.end(),
+                   [](const std::string &s) -> const char * { return s.data(); });
 
     if (!COpts.HasOutput || !HasInput) {
       // suppress the warning "argument unused during compilation: -c" of the
@@ -1517,7 +1178,7 @@ namespace {
         InitLang = !listener.m_ReadLang;
         InitTarget = !listener.m_ReadTarget;
       }
-    }
+    }OA
 
     FrontendOptions& FrontendOpts = Invocation.getFrontendOpts();
 
@@ -1683,6 +1344,10 @@ namespace {
     // adjusted per transaction in IncrementalParser::codeGenTransaction().
     CGOpts.setInlining(CodeGenOptions::NormalInlining);
 
+    bool debuggingEnabled =
+       cling::utils::ConvertEnvValueToBool(std::getenv("CLING_DEBUG"));
+    bool profilingEnabled =
+       cling::utils::ConvertEnvValueToBool(std::getenv("CLING_PROFILE"));
     // Add debugging info when debugging or profiling
     if (debuggingEnabled || profilingEnabled)
       CGOpts.setDebugInfo(codegenoptions::FullDebugInfo);
@@ -1695,6 +1360,7 @@ namespace {
     if (!OnlyLex) {
       // -nobuiltininc
       clang::HeaderSearchOptions& HOpts = CI->getHeaderSearchOpts();
+      std::string ClingBin = GetExecutablePath(argv[0]);
       if (CI->getHeaderSearchOpts().UseBuiltinIncludes)
         AddRuntimeIncludePaths(ClingBin, HOpts);
 
@@ -1730,8 +1396,6 @@ namespace {
       PP.getHeaderSearchInfo().loadModuleMapFile(*File, /*IsSystem*/ false);
     }
 
-    HandleProgramActions(*CI);
-
     return CI.release(); // Passes over the ownership to the caller.
   }
 
@@ -1757,6 +1421,129 @@ CompilerInstance* CIFactory::createCI(
   return createCIImpl(std::move(Buffer), CompilerOptions(argc, argv),  LLVMDir,
                       std::move(consumer), moduleExtensions, OnlyLex);
 }
+
+void CIFactory::setupCompiler(CompilerInstance* CI, const CompilerOptions& CompilerOpts) {
+   SetupCompiler(CI, CompilerOpts);
+   if (CompilerOpts.CxxModules)
+     setupCxxModules(*CI);
+}
+
+void CIFactory::collectInvocationArgs(const CompilerOptions& COpts,
+                                      std::vector<std::string> &Args) {
+#if __APPLE__ && __arm64__
+    Args.push_back("--target=arm64-apple-darwin20.3.0");
+#endif
+
+    // If user has enabled C++ modules we add some special module flags to the
+    // compiler invocation.
+    if (COpts.CxxModules) {
+      // Enables modules in clang.
+      Args.push_back("-fmodules");
+      Args.push_back("-fcxx-modules");
+      // We want to use modules in local-submodule-visibility mode. This mode
+      // will probably be the future default mode for C++ modules in clang, so
+      // we want to start using right now.
+      // Maybe we have to remove this flag in the future when clang makes this
+      // mode the default and removes this internal flag.
+      Args.push_back("-Xclang");
+      Args.push_back("-fmodules-local-submodule-visibility");
+      // If we got a cache path, then we are supposed to place any modules
+      // we have to build in this directory.
+      if (!COpts.CachePath.empty()) {
+        Args.push_back("-fmodules-cache-path=" + COpts.CachePath);
+      }
+      // Disable the module hash. This gives us a flat file layout in the
+      // modules cache directory. In clang this is used to prevent modules from
+      // different compiler invocations to not collide, but we only have one
+      // compiler invocation in cling, so we don't need this.
+      Args.push_back("-Xclang");
+      Args.push_back("-fdisable-module-hash");
+      // Disable the warning when we import a module from extern C. Some headers
+      // from the STL are doing this and we can't really do anything about this.
+      Args.push_back("-Wno-module-import-in-extern-c");
+      // Disable the warning when we import a module in a function body. This
+      // is a ROOT-specific issue tracked by ROOT-9088.
+      // FIXME: Remove after merging ROOT's PR1306.
+      Args.push_back("-Wno-modules-import-nested-redundant");
+      // FIXME: We get an error "'cling/module.modulemap' from the precompiled
+      //  header has been overridden". This comes from a bug that rootcling
+      // introduces by adding a lot of garbage in the PCH/PCM files because it
+      // essentially serializes its current state of the AST. That usually
+      // includes a few memory buffers which override their own contents.
+      // We know how to remove this: just implement a callback in clang
+      // which calls back the interpreter when a module file is built. This is
+      // a lot of work as it needs fixing rootcling. See RE-0003.
+      Args.push_back("-Xclang");
+      Args.push_back("-fno-validate-pch");
+    }
+
+    // We do C++ by default; append right after argv[0] if no "-x" given
+    if (!COpts.Language)
+      Args.push_back("-xc++");
+
+    if (COpts.DefaultLanguage()) {
+      // By default, set the standard to what cling was compiled with.
+      // clang::driver::Compilation will do various things while initializing
+      // and by enforcing the std version now cling is telling clang what to
+      // do, rather than after clang has dedcuded a default.
+      switch (CxxStdCompiledWith()) {
+        case 20: Args.emplace_back("-std=c++20"); break;
+        case 17: Args.emplace_back("-std=c++17"); break;
+        case 14: Args.emplace_back("-std=c++14"); break;
+        case 11: Args.emplace_back("-std=c++11"); break;
+        default: llvm_unreachable("Unrecognized C++ version");
+      }
+    }
+
+    // This argument starts the cling instance with the x86 target. Otherwise,
+    // the first job in the joblist starts the cling instance with the nvptx
+    // target.
+    if(COpts.CUDAHost)
+      Args.push_back("--cuda-host-only");
+
+    bool debuggingEnabled =
+        cling::utils::ConvertEnvValueToBool(std::getenv("CLING_DEBUG"));
+    bool profilingEnabled =
+        cling::utils::ConvertEnvValueToBool(std::getenv("CLING_PROFILE"));
+
+#ifdef __linux__
+    // Keep frame pointer to make JIT stack unwinding reliable for profiling
+    if (profilingEnabled)
+      Args.push_back("-fno-omit-frame-pointer");
+#endif
+
+    // Disable optimizations and keep frame pointer when debugging
+    if (debuggingEnabled)
+      Args.push_back("-O0 -fno-omit-frame-pointer");
+
+    // Be explicit about the stdlib on OS X
+    // Would be nice on Linux but will warn 'argument unused during compilation'
+    // when -nostdinc++ is passed
+#ifdef __APPLE__
+    if (!COpts.StdLib) {
+#ifdef _LIBCPP_VERSION
+      Args.push_back("-stdlib=libc++");
+#elif defined(__GLIBCXX__)
+      Args.push_back("-stdlib=libstdc++");
+#endif
+    }
+#endif
+    // Add host specific includes, -resource-dir if necessary, and -isysroot
+    AddHostArguments(""/*ClingBin*/, Args, /*LLVMDir*/ nullptr, COpts);
+
+    // Add defines.
+
+    Args.push_back("-D__CLING__");
+    if (COpts.DefaultLanguage())
+      Args.push_back("-D__CLING__CXX" + std::to_string(CxxStdCompiledWith()));
+
+    // argv[0] already inserted, get the rest
+    Args.insert(Args.end(), COpts.Remaining.begin()+1, COpts.Remaining.end());
+}
+
+  unsigned CIFactory::CxxStdCompiledWith() {
+    return ::CxxStdCompiledWith();
+  }
 
 } // namespace cling
 

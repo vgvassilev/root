@@ -1055,8 +1055,28 @@ void ASTFrontendAction::ExecuteAction() {
   if (!CI.hasSema())
     CI.createSema(getTranslationUnitKind(), CompletionConsumer);
 
-  ParseAST(CI.getSema(), CI.getFrontendOpts().ShowStats,
-           CI.getFrontendOpts().SkipFunctionBodies);
+  assert(!P);
+  Sema &S = CI.getSema();
+  Preprocessor &PP = S.getPreprocessor();
+  const FrontendOptions& FEOpts = CI.getFrontendOpts();
+  P = std::make_unique<Parser>(PP, S, FEOpts.SkipFunctionBodies);
+  PP.EnterMainSourceFile();
+  ExternalASTSource *External = S.getASTContext().getExternalSource();
+  if (External)
+    External->StartTranslationUnit(&S.getASTConsumer());
+
+  // If a PCH through header is specified that does not have an include in
+  // the source, or a PCH is being created with #pragma hdrstop with nothing
+  // after the pragma, there won't be any tokens or a Lexer.
+  if (S.getPreprocessor().getCurrentLexer())
+    P->Initialize();
+
+  clang::ParseAST(S, *P, FEOpts.ShowStats);
+}
+
+void ASTFrontendAction::EndSourceFileAction() {
+  // Parser is short-lived and need to be destroyed before Sema.
+  P.reset();
 }
 
 void PluginASTAction::anchor() { }

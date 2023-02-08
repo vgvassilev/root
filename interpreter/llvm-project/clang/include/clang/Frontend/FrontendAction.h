@@ -22,6 +22,7 @@
 #include "clang/Basic/LangOptions.h"
 #include "clang/Frontend/ASTUnit.h"
 #include "clang/Frontend/FrontendOptions.h"
+#include "clang/Parse/Parser.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
 #include <memory>
@@ -227,7 +228,8 @@ public:
   ///
   /// \return True on success; on failure the compilation of this file should
   /// be aborted and neither Execute() nor EndSourceFile() should be called.
-  bool BeginSourceFile(CompilerInstance &CI, const FrontendInputFile &Input);
+  virtual bool BeginSourceFile(CompilerInstance &CI,
+                               const FrontendInputFile &Input);
 
   /// Set the source manager's main input file, and run the action.
   llvm::Error Execute();
@@ -242,13 +244,14 @@ public:
 /// Abstract base class to use for AST consumer-based frontend actions.
 class ASTFrontendAction : public FrontendAction {
 protected:
+  std::unique_ptr<Parser> P;
   /// Implement the ExecuteAction interface by running Sema on
   /// the already-initialized AST consumer.
   ///
   /// This will also take care of instantiating a code completion consumer if
   /// the user requested it and the action supports it.
   void ExecuteAction() override;
-
+  void EndSourceFileAction() override;
 public:
   ASTFrontendAction() {}
   bool usesPreprocessorOnly() const override { return false; }

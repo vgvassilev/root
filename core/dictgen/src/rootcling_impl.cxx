@@ -74,6 +74,7 @@
 #include "cling/Interpreter/Value.h"
 #include "clang/AST/CXXInheritance.h"
 #include "clang/Basic/Diagnostic.h"
+#include "clang/Basic/Version.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/FrontendActions.h"
 #include "clang/Frontend/FrontendDiagnostic.h"
@@ -3929,7 +3930,7 @@ static bool ModuleContainsHeaders(TModuleGenerator &modGen, clang::HeaderSearch 
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Check moduleName validity from modulemap. Check if this module is defined or not.
-static bool CheckModuleValid(TModuleGenerator &modGen, const std::string &resourceDir, cling::Interpreter &interpreter,
+static bool CheckModuleValid(TModuleGenerator &modGen, cling::Interpreter &interpreter,
                              llvm::StringRef LinkdefPath, const std::string &moduleName)
 {
    clang::CompilerInstance *CI = interpreter.getCI();
@@ -4059,23 +4060,27 @@ int RootClingMain(int argc,
 
    llvm::cl::ParseCommandLineOptions(argc, argv, "rootcling");
 
-   std::string llvmResourceDir = std::string(gDriverConfig->fTROOT__GetEtcDir()) + "/cling";
+   llvm::SmallString<128> ResourceDir(gDriverConfig->fTROOT__GetEtcDir());
+   ResourceDir +=  "/cling";
+   ResourceDir = llvm::sys::path::convert_to_slash(ResourceDir.str());
+   llvm::sys::path::append(ResourceDir, llvm::Twine("lib") /*+ CLANG_LIBDIR_SUFFIX*/,
+                           "clang", CLANG_VERSION_STRING);
+   std::vector<std::string> clingArgs;
+   clingArgs.push_back(executableFileName);
+   clingArgs.push_back("-resource-dir=" + ResourceDir.str().str());
    if (gBareClingSubcommand) {
-      std::vector<const char *> clingArgsC;
-      clingArgsC.push_back(executableFileName);
       // Help cling finds its runtime (RuntimeUniverse.h and such).
-      clingArgsC.push_back("-I");
-      clingArgsC.push_back(gDriverConfig->fTROOT__GetEtcDir());
-
-      //clingArgsC.push_back("-resource-dir");
-      //clingArgsC.push_back(llvmResourceDir.c_str());
+      clingArgs.push_back("-I");
+      clingArgs.push_back(gDriverConfig->fTROOT__GetEtcDir());
 
       for (const std::string& Opt : gOptBareClingSink)
-         clingArgsC.push_back(Opt.c_str());
+         clingArgs.push_back(Opt.c_str());
+      std::vector<const char *> ClingArgv(clingArgs.size());
+      std::transform(clingArgs.begin(), clingArgs.end(), ClingArgv.begin(),
+                     [](const std::string &s) -> const char * { return s.data(); });
 
-      auto interp = std::make_unique<cling::Interpreter>(clingArgsC.size(),
-                                                         &clingArgsC[0],
-                                                         llvmResourceDir.c_str());
+      auto interp = std::make_unique<cling::Interpreter>(ClingArgv.size(),
+                                                         &ClingArgv[0]);
       // FIXME: Diagnose when we have misspelled a flag. Currently we show no
       // diagnostic and report exit as success.
       return interp->getDiagnostics().hasFatalErrorOccurred();
@@ -4143,8 +4148,6 @@ int RootClingMain(int argc,
       return 1;
    }
 
-   std::vector<std::string> clingArgs;
-   clingArgs.push_back(executableFileName);
    clingArgs.push_back("-iquote.");
 
    bool dictSelection = !gOptNoDictSelection;
@@ -4247,16 +4250,10 @@ int RootClingMain(int argc,
    clingArgs.push_back("-DSYSTEM_TYPE_unix");
 #endif
 
-   clingArgs.push_back("-fsyntax-only");
-#ifndef R__WIN32
-   clingArgs.push_back("-fPIC");
-#endif
-   clingArgs.push_back("-Xclang");
-   clingArgs.push_back("-fmodules-embed-all-files");
-   clingArgs.push_back("-Xclang");
-   clingArgs.push_back("-main-file-name");
-   clingArgs.push_back("-Xclang");
-   clingArgs.push_back((dictname + ".h").c_str());
+   // clingArgs.push_back("-Xclang");
+   // clingArgs.push_back("-main-file-name");
+   // clingArgs.push_back("-Xclang");
+   // clingArgs.push_back((dictname + ".h").c_str());
 
    ROOT::TMetaUtils::SetPathsForRelocatability(clingArgs);
 
@@ -4277,6 +4274,19 @@ int RootClingMain(int argc,
       gOptSharedLibFileName = gOptDictionaryFileName.getValue();
    }
 
+   if (!isPCH && !gOptCxxModule)
+      clingArgs.push_back("-fsyntax-only");
+
+   // Clone the arguments for the linkdef parsing without including the
+   // modules-specific arguments as it hinders pragma parsing.
+   std::vector<std::string> clingArgsLinkdefParsing = clingArgs;
+
+#ifndef R__WIN32
+   clingArgs.push_back("-fPIC");
+#endif
+   clingArgs.push_back("-Xclang");
+   clingArgs.push_back("-fmodules-embed-all-files");
+
    if (!isPCH && gOptCxxModule) {
       // We just pass -fmodules, the CIFactory will do the rest and configure
       // clang correctly once it sees this flag.
@@ -4286,7 +4296,7 @@ int RootClingMain(int argc,
       for (const std::string &modulemap : gOptModuleMapFiles)
          clingArgsInterpreter.push_back("-fmodule-map-file=" + modulemap);
 
-      clingArgsInterpreter.push_back("-fmodule-map-file=" +
+      clingArgsInterpreter.push_back(/*"-fmodule-map-file=" +*/
                                      std::string(gDriverConfig->fTROOT__GetIncludeDir()) +
                                      "/module.modulemap");
       std::string ModuleMapCWD = ROOT::FoundationUtils::GetCurrentDir() + "/module.modulemap";
@@ -4304,7 +4314,10 @@ int RootClingMain(int argc,
       clingArgsInterpreter.push_back("-Xclang");
       clingArgsInterpreter.push_back("msvc" + std::string(rootclingStringify(_MSC_VER)));
 #endif
+      clingArgsInterpreter.push_back("-Xclang");
+      clingArgsInterpreter.push_back("-emit-module");
       clingArgsInterpreter.push_back("-fmodule-name=" + moduleName.str());
+      //clingArgsInterpreter.push_back("-o" + moduleName.str() + ".pcm");
 
       std::string moduleCachePath = llvm::sys::path::parent_path(gOptSharedLibFileName).str();
       // FIXME: This is a horrible workaround to fix the incremental builds.
@@ -4371,13 +4384,10 @@ int RootClingMain(int argc,
       clingArgsC.push_back("-ffast-math");
 #endif
 
-      owningInterpPtr.reset(new cling::Interpreter(clingArgsC.size(), &clingArgsC[0],
-                                                   llvmResourceDir.c_str()));
+      owningInterpPtr.reset(new cling::Interpreter(clingArgsC.size(), &clingArgsC[0]));
       interpPtr = owningInterpPtr.get();
    } else {
       // Pass the interpreter arguments to TCling's interpreter:
-      clingArgsC.push_back("-resource-dir");
-      clingArgsC.push_back(llvmResourceDir.c_str());
       clingArgsC.push_back(nullptr); // signal end of array
       const char ** &extraArgs = *gDriverConfig->fTROOT__GetExtraInterpreterArgs();
       extraArgs = &clingArgsC[1]; // skip binary name
@@ -4390,8 +4400,8 @@ int RootClingMain(int argc,
    cling::Interpreter &interp = *interpPtr;
    clang::CompilerInstance *CI = interp.getCI();
    // FIXME: Remove this once we switch cling to use the driver. This would handle  -fmodules-embed-all-files for us.
-   CI->getFrontendOpts().ModulesEmbedAllFiles = true;
-   CI->getSourceManager().setAllFilesAreTransient(true);
+   // CI->getFrontendOpts().ModulesEmbedAllFiles = true;
+   // CI->getSourceManager().setAllFilesAreTransient(true);
 
    clang::Preprocessor &PP = CI->getPreprocessor();
    clang::HeaderSearch &headerSearch = PP.getHeaderSearchInfo();
@@ -4478,10 +4488,10 @@ int RootClingMain(int argc,
    TClassEdit::Init(&helper);
 
    // flags used only for the pragma parser:
-   clingArgs.push_back("-D__CINT__");
-   clingArgs.push_back("-D__MAKECINT__");
+   clingArgsLinkdefParsing.push_back("-D__CINT__");
+   clingArgsLinkdefParsing.push_back("-D__MAKECINT__");
 
-   AddPlatformDefines(clingArgs);
+   AddPlatformDefines(clingArgsLinkdefParsing);
 
    std::string currentDirectory = ROOT::FoundationUtils::GetCurrentDir();
 
@@ -4745,10 +4755,10 @@ int RootClingMain(int argc,
       // interpPragmaSource and we still need to process it.
 
       LinkdefReader ldefr(interp, constructorTypes);
-      clingArgs.push_back("-Ietc/cling/cint"); // For multiset and multimap
+      clingArgsLinkdefParsing.push_back("-Ietc/cling/cint"); // For multiset and multimap
 
-      if (!ldefr.Parse(selectionRules, interpPragmaSource, clingArgs,
-                       llvmResourceDir.c_str())) {
+      if (!ldefr.Parse(selectionRules, interpPragmaSource, clingArgsLinkdefParsing,
+                       /*llvmResourceDir.c_str()*/nullptr)) {
          ROOT::TMetaUtils::Error(nullptr, "Parsing #pragma failed %s\n", linkdefFilename.c_str());
          rootclingRetCode += 1;
       } else {
@@ -5007,7 +5017,7 @@ int RootClingMain(int argc,
          if (modGen.IsPCH()) {
             if (!GenerateAllDict(modGen, CI, currentDirectory)) return 1;
          } else if (gOptCxxModule) {
-            if (!CheckModuleValid(modGen, llvmResourceDir, interp, linkdefFilename, moduleName.str()))
+            if (!CheckModuleValid(modGen, interp, linkdefFilename, moduleName.str()))
                return 1;
          }
       }

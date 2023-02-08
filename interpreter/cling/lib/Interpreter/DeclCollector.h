@@ -31,7 +31,6 @@ namespace cling {
   class ASTTransformer;
   class WrapperTransformer;
   class DeclCollector;
-  class IncrementalParser;
   class Transaction;
 
   ///\brief Collects declarations and fills them in cling::Transaction.
@@ -52,7 +51,6 @@ namespace cling {
     ///
     std::vector<std::unique_ptr<WrapperTransformer>> m_WrapperTransformers;
 
-    IncrementalParser* m_IncrParser = nullptr;
     std::unique_ptr<clang::ASTConsumer> m_Consumer;
     Transaction* m_CurTransaction = nullptr;
 
@@ -86,9 +84,7 @@ namespace cling {
         WT->SetConsumer(this);
     }
 
-    void Setup(IncrementalParser* IncrParser,
-               std::unique_ptr<ASTConsumer> Consumer,
-               clang::Preprocessor& PP);
+    void Setup(std::unique_ptr<ASTConsumer> Consumer, clang::Preprocessor& PP);
 
     /// \{
     /// \name ASTConsumer overrides
