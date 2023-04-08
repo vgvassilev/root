@@ -345,20 +345,9 @@ namespace {
     else {
       // Mark the current number of arguemnts
       const size_t nArgs = CallArgs.size();
-      if (desugaredTy->isIntegralOrEnumerationType()) {
-        // 1)  enum, integral, float, double, referece, pointer types :
-        //      call to cling::internal::setValueNoAlloc(...);
-
-        // force-cast it into uint64 in order to pick up the correct overload.
-        QualType UInt64Ty = m_Context->UnsignedLongLongTy;
-        TypeSourceInfo* TSI
-          = m_Context->getTrivialTypeSourceInfo(UInt64Ty, noLoc);
-        Expr* castedE
-          = m_Sema->BuildCStyleCastExpr(noLoc, TSI, noLoc, E).get();
-        CallArgs.push_back(castedE);
-      }
-      else if (desugaredTy->isReferenceType()) {
-        // we need to get the address of the references
+      if (desugaredTy->isIntegralOrEnumerationType() ||
+          desugaredTy->isReferenceType() || desugaredTy->isFloatingType()) {
+        // we need to get the address of these
         Expr* AddrOfE  = m_Sema->CreateBuiltinUnaryOp(noLoc, UO_AddrOf, E).get();
         CallArgs.push_back(AddrOfE);
       }
@@ -373,11 +362,6 @@ namespace {
       }
       else if (desugaredTy->isNullPtrType()) {
         // nullptr should decay to void* just fine.
-        CallArgs.push_back(E);
-      }
-      else if (desugaredTy->isFloatingType()) {
-        // floats and double will fall naturally in the correct
-        // case, because of the overload resolution.
         CallArgs.push_back(E);
       }
 
@@ -502,12 +486,14 @@ namespace {
   ///\param [in] vpQT - The opaque ptr for the clang::QualType of value stored.
   ///\param [out] vpStoredValRef - The Value that is allocated.
   static cling::Value&
-  allocateStoredRefValueAndGetGV(void* vpI, void* vpSVR, void* vpQT) {
+  allocateStoredRefValueAndGetGV(void* vpI, void* vpSVR, void* vpQT,
+                                 void* payload = nullptr) {
     cling::Interpreter* i = (cling::Interpreter*)vpI;
     clang::QualType QT = clang::QualType::getFromOpaquePtr(vpQT);
     cling::Value& SVR = *(cling::Value*)vpSVR;
     // Here the copy keeps the refcounted value alive.
-    SVR = cling::Value(QT, *i);
+    SVR = payload ? cling::Value::CreateFromOpaquePayload(*i, QT, payload) :
+       cling::Value(QT, *i);
     return SVR;
   }
 }
@@ -515,44 +501,9 @@ namespace cling {
 namespace runtime {
   namespace internal {
     CLING_LIB_EXPORT
-    void setValueNoAlloc(void* vpI, void* vpSVR, void* vpQT, char vpOn) {
-      // In cases of void we 'just' need to change the type of the value.
-      allocateStoredRefValueAndGetGV(vpI, vpSVR, vpQT);
-    }
-
-    CLING_LIB_EXPORT
-    void setValueNoAlloc(void* vpI, void* vpSVR, void* vpQT, char vpOn,
-                         float value) {
-      allocateStoredRefValueAndGetGV(vpI, vpSVR, vpQT).setFloat(value);
-      dumpIfNoStorage(vpSVR, vpOn);
-    }
-
-    CLING_LIB_EXPORT
-    void setValueNoAlloc(void* vpI, void* vpSVR, void* vpQT, char vpOn,
-                         double value) {
-      allocateStoredRefValueAndGetGV(vpI, vpSVR, vpQT).setDouble(value);
-      dumpIfNoStorage(vpSVR, vpOn);
-    }
-
-    CLING_LIB_EXPORT
-    void setValueNoAlloc(void* vpI, void* vpSVR, void* vpQT, char vpOn,
-                         long double value) {
-      allocateStoredRefValueAndGetGV(vpI, vpSVR, vpQT).setLongDouble(value);
-      dumpIfNoStorage(vpSVR, vpOn);
-    }
-
-    CLING_LIB_EXPORT
-    void setValueNoAlloc(void* vpI, void* vpSVR, void* vpQT, char vpOn,
-                         unsigned long long value) {
-      allocateStoredRefValueAndGetGV(vpI, vpSVR, vpQT).setULongLong(value);
-      dumpIfNoStorage(vpSVR, vpOn);
-    }
-
-    CLING_LIB_EXPORT
     void setValueNoAlloc(void* vpI, void* vpSVR, void* vpQT, char vpOn,
                          const void* value){
-      allocateStoredRefValueAndGetGV(vpI, vpSVR, vpQT)
-        .setPtr(const_cast<void*>(value));
+      allocateStoredRefValueAndGetGV(vpI, vpSVR, vpQT, const_cast<void*>(value));
       dumpIfNoStorage(vpSVR, vpOn);
     }
 

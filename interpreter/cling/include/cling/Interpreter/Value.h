@@ -216,6 +216,9 @@ namespace cling {
        static constexpr bool value = false;
        constexpr operator bool() const noexcept { return value; }
     };
+    static Value CreateFromOpaquePayload(Interpreter& Interp,
+                                         clang::QualType Ty,
+                                         void* payload);
     /// \brief Create a valid Value holding a clang::Type deduced from the
     /// argument. This is useful when we want to create a \c Value with a
     /// particular value from compiled code.

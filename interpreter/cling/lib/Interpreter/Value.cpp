@@ -289,6 +289,30 @@ namespace cling {
     }
   }
 
+  Value Value::CreateFromOpaquePayload(Interpreter& Interp, clang::QualType Ty,
+                                       void* payload) {
+    Value res = Value(Ty, Interp);
+    if (Ty->isVoidType()) {
+      assert(!payload && "Setting payload of a void type?");
+      return res;
+    }
+    switch(getCorrespondingTypeKind(Ty, Interp.getCI()->getASTContext())) {
+    default:
+      assert(false && "Type not supported");
+      return {}; // Invalid Value.
+
+    case kPtrOrObjTy: res.setPtr(payload); break;
+
+#define X(type, name)                           \
+      case k##name: res.set##name(*static_cast<type*>(payload)); break;
+
+      CLING_VALUE_BUILTIN_TYPES
+#undef X
+    }
+
+    return res;
+  }
+
 #define X(type, name)                                                   \
   template <> Value Value::Create(Interpreter& Interp, type val) {      \
     clang::ASTContext &C = Interp.getCI()->getASTContext();             \
