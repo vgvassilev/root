@@ -301,9 +301,9 @@ namespace cling {
     m_Consumer->CompleteTentativeDefinition(VD);
   }
 
-  void DeclCollector::HandleTranslationUnit(ASTContext& /*Ctx*/) {
-    //if (m_Consumer)
-    //  m_Consumer->HandleTranslationUnit(Ctx);
+  void DeclCollector::HandleTranslationUnit(ASTContext& Ctx) {
+    // if (m_Consumer)
+    //   m_Consumer->HandleTranslationUnit(Ctx);
   }
 
   void DeclCollector::HandleCXXImplicitFunctionInstantiation(FunctionDecl *D) {
@@ -328,4 +328,13 @@ namespace cling {
     m_Consumer->HandleCXXStaticMemberVarInstantiation(D);
   }
 
+  void DeclCollector::InitializeSema(Sema &S) {
+    if (SemaConsumer *SC = dyn_cast<SemaConsumer>(m_Consumer.get()))
+      SC->InitializeSema(S);
+  }
+
+  void DeclCollector::ForgetSema() {
+    if (SemaConsumer *SC = dyn_cast<SemaConsumer>(m_Consumer.get()))
+      SC->ForgetSema();
+  }
 } // namespace cling

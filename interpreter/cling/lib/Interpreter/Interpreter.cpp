@@ -394,13 +394,13 @@ namespace cling {
     // first:
     m_LookupHelper.reset();
 
-    ShutDown();
+    //ShutDown();
 
     // We want to keep the callback alive during the shutdown of Sema, CodeGen
     // and the ASTContext. For that to happen we shut down the IncrementalParser
     // explicitly, before the implicit destruction (through the unique_ptr) of
     // the callbacks.
-    m_IncrParser.reset(nullptr);
+    //m_IncrParser.reset(nullptr);
   }
 
   Transaction* Interpreter::Initialize(bool NoRuntime, bool SyntaxOnly,

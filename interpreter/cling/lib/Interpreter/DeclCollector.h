@@ -10,7 +10,7 @@
 #ifndef CLING_DECL_COLLECTOR_H
 #define CLING_DECL_COLLECTOR_H
 
-#include "clang/AST/ASTConsumer.h"
+#include "clang/Sema/SemaConsumer.h"
 
 #include "ASTTransformer.h"
 
@@ -23,6 +23,7 @@ namespace clang {
   class Decl;
   class DeclGroupRef;
   class Preprocessor;
+  class Sema;
   class Token;
 }
 
@@ -39,7 +40,7 @@ namespace cling {
   /// cling::DeclCollector is responsible for appending all the declarations
   /// seen by clang.
   ///
-  class DeclCollector : public clang::ASTConsumer {
+  class DeclCollector : public clang::SemaConsumer {
     /// \brief PPCallbacks overrides/ Macro support
     class PPAdapter;
 
@@ -85,6 +86,7 @@ namespace cling {
     }
 
     void Setup(std::unique_ptr<ASTConsumer> Consumer, clang::Preprocessor& PP);
+    ASTConsumer* getConsumer() const { return m_Consumer.get(); }
 
     /// \{
     /// \name ASTConsumer overrides
@@ -107,8 +109,15 @@ namespace cling {
     void setTransaction(Transaction* curT) { m_CurTransaction = curT; }
     /// \}
 
-    // dyn_cast/isa support
-    static bool classof(const clang::ASTConsumer*) { return true; }
+    /// \{
+    /// \name SemaConsumer overrides
+
+    void InitializeSema(clang::Sema& S) final;
+    void ForgetSema() final;
+    /// \}
+
+    // // dyn_cast/isa support
+    // static bool classof(const clang::ASTConsumer*) { return true; }
   };
 } // namespace cling
 

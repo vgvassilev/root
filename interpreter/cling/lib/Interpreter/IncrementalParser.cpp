@@ -408,6 +408,9 @@ public:
     Sema &S = CI.getSema();
     const FrontendOptions& FEOpts = CI.getFrontendOpts();
     clang::ParseAST(S, *m_Parser, FEOpts.ShowStats);
+    // if (//!IsTerminating &&
+    //     CI.getFrontendOpts().ProgramAction == frontend::GenerateModule)
+    //   m_Consumer->getConsumer()->HandleTranslationUnit(CI.getASTContext());
   }
 
   void ExecuteAction() override {
@@ -425,9 +428,9 @@ public:
   bool BeginSourceFile(CompilerInstance &CI,
                        const FrontendInputFile &RealInput) override {
     // Will initialize the CI.
-    if (!IsInitialized) {
+    if (!IsInitialized)
       return WrapperFrontendAction::BeginSourceFile(CI, RealInput);
-    }
+
     return true;
   }
 
@@ -435,8 +438,12 @@ public:
   // clang objects alive and to incrementally grow the current TU.
   void EndSourceFile() override {
     // The WrappedAction can be nullptr if we issued an error in the ctor.
-    if (IsTerminating && getWrapped())
+    if (IsTerminating && getWrapped()) {
+       CompilerInstance &CI = *m_Interpreter.getCI();
+       if (CI.getFrontendOpts().ProgramAction == frontend::GenerateModule)
+         m_Consumer->getConsumer()->HandleTranslationUnit(CI.getASTContext());
       WrapperFrontendAction::EndSourceFile();
+    }
   }
 
   void FinalizeAction() {

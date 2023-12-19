@@ -1178,7 +1178,7 @@ namespace {
         InitLang = !listener.m_ReadLang;
         InitTarget = !listener.m_ReadTarget;
       }
-    }OA
+    }
 
     FrontendOptions& FrontendOpts = Invocation.getFrontendOpts();
 

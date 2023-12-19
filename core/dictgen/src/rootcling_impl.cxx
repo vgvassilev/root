@@ -4317,9 +4317,23 @@ int RootClingMain(int argc,
       clingArgsInterpreter.push_back("-Xclang");
       clingArgsInterpreter.push_back("-emit-module");
       clingArgsInterpreter.push_back("-fmodule-name=" + moduleName.str());
-      //clingArgsInterpreter.push_back("-o" + moduleName.str() + ".pcm");
+      clingArgsInterpreter.push_back("-o" + moduleName.str() + ".pcm");
 
       std::string moduleCachePath = llvm::sys::path::parent_path(gOptSharedLibFileName).str();
+      if (gOptCxxModule) {
+         for (llvm::StringRef DepMod : gOptModuleDependencies) {
+            if (DepMod.endswith("_rdict.pcm")) {
+               ROOT::TMetaUtils::Warning(nullptr, "'%s' value is deprecated. Please use [<fullpath>]%s.pcm\n",
+                                         DepMod.data(),
+                                         GetModuleNameFromRdictName(DepMod).str().data());
+            }
+            DepMod = GetModuleNameFromRdictName(DepMod);
+            // We might deserialize.
+            clingArgsInterpreter.push_back(std::string("-fmodule-file=")
+                                           + (moduleCachePath + llvm::sys::path::get_separator() + DepMod + ".pcm").str());
+         }
+      }
+
       // FIXME: This is a horrible workaround to fix the incremental builds.
       // The enumerated modules are built by clang impicitly based on #include of
       // a header which is contained within that module. The build system has
@@ -4446,22 +4460,22 @@ int RootClingMain(int argc,
    interp.getOptions().ErrorOut = true;
    interp.enableRawInput(true);
 
-   if (gOptCxxModule) {
-      for (llvm::StringRef DepMod : gOptModuleDependencies) {
-         if (DepMod.endswith("_rdict.pcm")) {
-            ROOT::TMetaUtils::Warning(nullptr, "'%s' value is deprecated. Please use [<fullpath>]%s.pcm\n",
-                                      DepMod.data(),
-                                      GetModuleNameFromRdictName(DepMod).str().data());
-         }
-         DepMod = GetModuleNameFromRdictName(DepMod);
-         // We might deserialize.
-         cling::Interpreter::PushTransactionRAII RAII(&interp);
-         if (!interp.loadModule(DepMod.str(), /*complain*/false)) {
-            ROOT::TMetaUtils::Error(nullptr, "Module '%s' failed to load.\n",
-                                    DepMod.data());
-         }
-      }
-   }
+   // if (gOptCxxModule) {
+   //    for (llvm::StringRef DepMod : gOptModuleDependencies) {
+   //       if (DepMod.endswith("_rdict.pcm")) {
+   //          ROOT::TMetaUtils::Warning(nullptr, "'%s' value is deprecated. Please use [<fullpath>]%s.pcm\n",
+   //                                    DepMod.data(),
+   //                                    GetModuleNameFromRdictName(DepMod).str().data());
+   //       }
+   //       DepMod = GetModuleNameFromRdictName(DepMod);
+   //       // We might deserialize.
+   //       cling::Interpreter::PushTransactionRAII RAII(&interp);
+   //       if (!interp.loadModule(DepMod.str(), /*complain*/false)) {
+   //          ROOT::TMetaUtils::Error(nullptr, "Module '%s' failed to load.\n",
+   //                                  DepMod.data());
+   //       }
+   //    }
+   // }
 
    if (!isGenreflex) { // rootcling
       // ROOTCINT uses to define a few header implicitly, we need to do it explicitly.
@@ -5123,14 +5137,6 @@ int RootClingMain(int argc,
 
    if (genreflex::verbose)
       tmpCatalog.dump();
-
-   // Manually call end of translation unit because we never call the
-   // appropriate deconstructors in the interpreter. This writes out the C++
-   // module file that we currently generate.
-   {
-      cling::Interpreter::PushTransactionRAII RAII(&interp);
-      CI->getSema().getASTConsumer().HandleTranslationUnit(CI->getSema().getASTContext());
-   }
 
    // Add the warnings
    rootclingRetCode += ROOT::TMetaUtils::GetNumberOfErrors();
